@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "name": "whisper-edge-vercel-example",
+  "type": "module",
+  "dependencies": { "whisper-edge": "^0.1.0" }
+}

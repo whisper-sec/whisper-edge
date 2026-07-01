@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "name": "whisper-edge-lambda-example",
+  "type": "module",
+  "dependencies": { "whisper-edge": "^0.1.0" }
+}

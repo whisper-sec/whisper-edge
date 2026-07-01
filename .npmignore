@@ -1,0 +1,10 @@
+# Publish only the built library + docs (see package.json "files"). Keep source, tests,
+# examples, and CI out of the tarball.
+src/
+test/
+examples/
+.github/
+tsconfig.json
+*.tgz
+.env
+.env.*

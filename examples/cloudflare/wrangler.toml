@@ -1,0 +1,7 @@
+name = "whisper-edge-demo"
+main = "worker.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Optional — the control tier. Set the secret (never commit it):
+#   wrangler secret put WHISPER_API_KEY
