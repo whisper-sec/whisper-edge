@@ -16,6 +16,12 @@ export { control, WhisperControl } from "./control.js";
 export type { ControlOptions, RegisterArgs, IdentityArgs, PolicyArgs, LogsArgs } from "./control.js";
 export { WhisperError } from "./http.js";
 
+// EGRESS — route real traffic out through an agent's routable /128 (in-process, no CLI, no proxy).
+export { agentEgress } from "./egress.js";
+export type { AgentEgress, EgressOptions, EgressTransport } from "./egress.js";
+export { detectRuntime } from "./tunnel.js";
+export type { EgressRuntime, TunnelSocket } from "./tunnel.js";
+
 // Low-level building blocks, exported for power users who craft their own queries.
 export { buildAgentsQuery, escapeCypherString, quoteCypherString, cypherMap, lit } from "./cypher.js";
 export { decodeEnvelope } from "./envelope.js";

@@ -2,7 +2,14 @@
   "private": true,
   "name": "whisper-edge-cloudflare-example",
   "type": "module",
-  "scripts": { "dev": "wrangler dev", "deploy": "wrangler deploy" },
-  "dependencies": { "whisper-edge": "^0.1.0" },
-  "devDependencies": { "wrangler": "^3.78.0" }
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "whisper-edge": "^0.2.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
 }

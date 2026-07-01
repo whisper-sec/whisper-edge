@@ -2,5 +2,7 @@
   "private": true,
   "name": "whisper-edge-netlify-example",
   "type": "module",
-  "dependencies": { "whisper-edge": "^0.1.0" }
+  "dependencies": {
+    "whisper-edge": "^0.2.0"
+  }
 }

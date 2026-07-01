@@ -1,7 +1,7 @@
 {
   "name": "whisper-edge",
-  "version": "0.1.0",
-  "description": "Dependency-free Whisper agent-identity SDK for serverless & edge runtimes (Cloudflare Workers, Vercel, Deno, Netlify, AWS Lambda, Supabase). Keyless verify/resolve/RDAP + the full control plane with an API key.",
+  "version": "0.2.0",
+  "description": "Dependency-free Whisper agent-identity SDK for serverless & edge runtimes (Cloudflare Workers, Vercel, Deno, Netlify, AWS Lambda, Supabase). Keyless verify/resolve/RDAP, the full control plane with an API key, and REAL in-process egress from an agent's routable /128.",
   "type": "module",
   "exports": {
     ".": {
@@ -40,6 +40,8 @@
     "netlify",
     "lambda",
     "supabase",
+    "egress",
+    "proxy",
     "zero-dependency"
   ],
   "homepage": "https://whisper.online",

@@ -1,6 +1,6 @@
 name = "whisper-edge-demo"
 main = "worker.ts"
-compatibility_date = "2024-09-23"
+compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 # Optional — the control tier. Set the secret (never commit it):

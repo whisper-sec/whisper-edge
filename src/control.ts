@@ -11,7 +11,7 @@ import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
 import { endpointsFor } from "./keyless.js";
 import type { ControlResult, RequestOptions } from "./types.js";
 
-const USER_AGENT = "whisper-edge/0.1";
+const USER_AGENT = "whisper-edge/0.2";
 
 /** Options for creating a control client. */
 export interface ControlOptions extends RequestOptions {}
