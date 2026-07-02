@@ -29,7 +29,7 @@
 // instead of an opaque proxy failure.
 
 import { doFetch, WhisperError } from "./http.js";
-import { normaliseRequest } from "./tunnel.js";
+import { detectRuntime, normaliseRequest } from "./tunnel.js";
 import type { RequestOptions } from "./types.js";
 
 /** The canonical fetch-forward gateway. Overridable for pre-prod / self-host. */
@@ -51,6 +51,95 @@ export interface ForwardOptions extends RequestOptions {
 
 function sleep(ms: number): Promise<void> {
  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Node's built-in `fetch` (undici) turns ANY direct, non-proxied HTTP 407 response into an
+// opaque `TypeError: fetch failed` network error instead of handing back a normal Response —
+// an over-strict reading of the Fetch spec's proxy-authentication step that Firefox's fetch and
+// curl do not apply outside an actual CONNECT-proxied request (nodejs/undici#2896, "wontfix": by
+// design). The fetch-forward gateway legitimately answers with a real 407 while an egress token
+// is still propagating (see the retry loop below), so on Node that 407 is unobservable through
+// `fetch()` — the caller here always ends up in the generic-network-error branch and the
+// propagation retry can never run. There is no way to opt undici's `fetch()` out of this per
+// request, so on Node we bypass it for this ONE call and speak `node:http`/`node:https`
+// directly, which is not subject to the Fetch algorithm and returns 407 like any other status.
+// Skipped when the caller injects their own `fetch` (tests, custom transports) — that override
+// is honoured verbatim, per Postel: liberal in what we accept.
+// Minimal structural shape of `node:http`/`node:https` — the project ships no @types/node (it is
+// dependency-free, see tunnel.ts's Node adapter for the same pattern), so this is hand-typed to
+// exactly what we use rather than pulling in the real (much larger) node typings.
+interface NodeHttpResponseLike {
+ statusCode?: number;
+ statusMessage?: string;
+ headers: Record<string, string | string[] | undefined>;
+ on(ev: "data", fn: (chunk: Uint8Array) => void): void;
+ on(ev: "end", fn: () => void): void;
+ on(ev: "error", fn: (e: Error) => void): void;
+}
+interface NodeHttpRequestLike {
+ on(ev: "error", fn: (e: Error) => void): void;
+ setTimeout(ms: number, fn: () => void): void;
+ destroy(e?: Error): void;
+ end(chunk?: Uint8Array): void;
+}
+interface NodeHttpModuleLike {
+ request(
+ url: URL,
+ options: { method: string; headers: Record<string, string> },
+ cb: (res: NodeHttpResponseLike) => void,
+ ): NodeHttpRequestLike;
+}
+
+async function nodeForwardFetch(
+ url: URL,
+ init: { method: string; headers: Headers; body?: Uint8Array },
+ opts: RequestOptions | undefined,
+ what: string,
+): Promise<Response> {
+ const modName = url.protocol === "http:" ? "node:h" + "ttp" : "node:htt" + "ps";
+ const { request } = (await import(modName)) as NodeHttpModuleLike;
+ const timeoutMs = opts?.timeoutMs ?? 10_000;
+ const headers: Record<string, string> = {};
+ init.headers.forEach((v, k) => { headers[k] = v; });
+ if (init.body) headers["content-length"] = String(init.body.length);
+
+ return new Promise<Response>((resolve, reject) => {
+ let settled = false;
+ const done = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+ const req = request(url, { method: init.method, headers }, (res) => {
+ const chunks: Uint8Array[] = [];
+ res.on("data", (c) => chunks.push(c));
+ res.on("end", () => done(() => {
+ const respHeaders = new Headers();
+ for (const [k, v] of Object.entries(res.headers)) {
+ if (v === undefined) continue;
+ for (const one of Array.isArray(v) ? v : [v]) {
+ try { respHeaders.append(k, one); } catch { /* platform-forbidden header — skip */ }
+ }
+ }
+ const status = res.statusCode ?? 502;
+ const nullBody = status === 204 || status === 304 || status < 200;
+ const total = chunks.reduce((n, c) => n + c.length, 0);
+ const bodyBytes = new Uint8Array(total);
+ let off = 0;
+ for (const c of chunks) { bodyBytes.set(c, off); off += c.length; }
+ resolve(new Response(nullBody ? null : bodyBytes, {
+ status,
+ statusText: res.statusMessage,
+ headers: respHeaders,
+ }));
+ }));
+ res.on("error", (e) => done(() => reject(new WhisperError(`${what} unreachable: ${e.message}`, { status: 0 }))));
+ });
+ req.on("error", (e) => done(() => reject(new WhisperError(`${what} unreachable: ${e.message}`, { status: 0 }))));
+ req.setTimeout(timeoutMs, () => req.destroy(new Error(`${what} timed out after ${timeoutMs}ms`)));
+ if (opts?.signal) {
+ const onAbort = () => req.destroy(new Error(`${what} aborted`));
+ if (opts.signal.aborted) { done(() => reject(new WhisperError(`${what} aborted`, { status: 0 }))); return; }
+ opts.signal.addEventListener("abort", onAbort, { once: true });
+ }
+ if (init.body) req.end(init.body); else req.end();
+ });
 }
 
 /**
@@ -87,9 +176,24 @@ export function forwardFetch(authHeader: string, opts: ForwardOptions = {}): typ
  // implementation; TS's DOM lib types pin BodyInit to a concrete ArrayBuffer-backed generic
  // that our shared, runtime-agnostic Uint8Array (from normaliseRequest) doesn't structurally match.
  const outBody = (body ?? undefined) as BodyInit | undefined;
+
+ // Node's fetch cannot observe this gateway's 407 (see nodeForwardFetch above) — bypass it
+ // there, UNLESS the caller injected their own `fetch` (tests, custom transports), which is
+ // always honoured verbatim.
+ let forwardUrlObj: URL | null = null;
+ if (!opts.fetch && detectRuntime() === "node") {
+ try {
+ forwardUrlObj = new URL(forwardUrl);
+ } catch {
+ throw new WhisperError(`fetch-forward: unparseable forwardUrl "${forwardUrl}"`, { status: 400 });
+ }
+ }
+
  let resp: Response | undefined;
  for (let attempt = 1; attempt <= retries; attempt++) {
- resp = await doFetch(forwardUrl, { method, headers, body: outBody }, opts, "fetch-forward");
+ resp = forwardUrlObj
+ ? await nodeForwardFetch(forwardUrlObj, { method, headers, body: body ?? undefined }, opts, "fetch-forward")
+ : await doFetch(forwardUrl, { method, headers, body: outBody }, opts, "fetch-forward");
  if (resp.status !== 407) return resp;
  if (attempt < retries) await sleep(retryDelayMs);
  }

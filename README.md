@@ -123,7 +123,7 @@ the path that works in *every* fetch runtime that will ever exist, including one
 grow a socket API. Force it explicitly with `{ transport: "forward" }` (or force the raw-socket
 path with `{ transport: "socket" }`); the default, `"auto"`, follows the table above.
 
-**Retry on 407.** A freshly-minted egress token needs a short window (up to ~45s) to
+**Retry on 407.²** A freshly-minted egress token needs a short window (up to ~45s) to
 propagate to every gateway node — a 407 in that window means "not recognised on *this* node yet",
 not "bad token". `agentEgress`/`forwardFetch` retry a 407 automatically: a handful of attempts
 (default 4), ~1.5s apart, capped — enough hops to very likely land on a node that already knows
@@ -141,6 +141,12 @@ const egress = await agentEgress(process.env.WHISPER_API_KEY!, undefined, {
 });
 const res = await egress.fetch("https://api.example.com/whoami");
 ```
+
+² On Node, forwarding runs over `node:http`/`node:https` rather than the global `fetch`: Node's
+built-in `fetch` (undici) turns a direct, non-proxied HTTP `407` into an opaque network error
+instead of a normal response ([nodejs/undici#2896](https://github.com/nodejs/undici/issues/2896)),
+which would otherwise swallow the retry-on-407 behaviour above. This is internal and transparent —
+`{ transport: "forward" }` behaves identically on every runtime, including Node.
 
 ## Runtime examples
 

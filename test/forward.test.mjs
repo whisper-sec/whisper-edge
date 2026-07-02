@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { forwardFetch, DEFAULT_FORWARD_URL, WhisperError } from "../dist/index.js";
 
 const AUTH = "Basic dzpldF9TRUNSRVQ="; // Basic base64("w:et_SECRET") — a pre-built header, never a raw bearer
@@ -100,4 +101,127 @@ test("the retry budget and delay are configurable", async () => {
  const f = forwardFetch(AUTH, { fetch: fn, retries: 5, retryDelayMs: 1 });
  await assert.rejects(() => f("https://v6.ident.me"), WhisperError);
  assert.equal(calls.length, 5);
+});
+
+// ── real Node transport (no injected `fetch`) — regression coverage for the undici 407 behaviour (nodejs/undici#2896) ────────────────
+//
+// On Node, `fetch()` (undici) turns a direct, non-proxied HTTP 407 response into an opaque
+// `TypeError: fetch failed` network error instead of a normal Response (nodejs/undici#2896),
+// so forwardFetch bypasses it for its own request via node:http/node:https when the caller
+// hasn't injected a custom `fetch`. These tests run a REAL local http server and deliberately
+// do NOT pass `{ fetch }`, so they exercise that exact Node-native code path — the one the
+// mocked-fetch tests above cannot reach (a mock fetch never runs into the undici behaviour).
+
+/** Start a plain http server whose responder is swapped per-test; returns { url, close, calls }. */
+function localServer() {
+ let handler = (_req, res) => res.writeHead(200).end("ok");
+ const calls = [];
+ const server = createServer((req, res) => {
+ const chunks = [];
+ req.on("data", (c) => chunks.push(c));
+ req.on("end", () => {
+ calls.push({ method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
+ handler(req, res);
+ });
+ });
+ return new Promise((resolve) => {
+ server.listen(0, "127.0.0.1", () => {
+ const { port } = server.address();
+ resolve({
+ url: `http://127.0.0.1:${port}/forward`,
+ calls,
+ setHandler: (fn) => { handler = fn; },
+ close: () => new Promise((r) => server.close(r)),
+ });
+ });
+ });
+}
+
+test("Node path: a real 407 from the gateway is retried (not thrown as an opaque network error)", async () => {
+ const srv = await localServer();
+ try {
+ let hits = 0;
+ srv.setHandler((_req, res) => {
+ hits++;
+ if (hits < 3) return res.writeHead(407, { "content-type": "application/problem+json" }).end('{"error":"proxy_authentication_required","status":407}');
+ res.writeHead(200, { "x-whisper-egress-source": "2a04:2a01::abcd" }).end("2a04:2a01::abcd");
+ });
+ const f = forwardFetch(AUTH, { forwardUrl: srv.url, retryDelayMs: 5 }); // no `fetch` override — real Node path
+ const res = await f("https://v6.ident.me");
+ assert.equal(res.status, 200);
+ assert.equal(await res.text(), "2a04:2a01::abcd");
+ assert.equal(hits, 3); // 2 real 407s were correctly observed and retried, not thrown
+ } finally {
+ await srv.close();
+ }
+});
+
+test("Node path: a persistent real 407 exhausts the retry budget with the same clear WhisperError", async () => {
+ const srv = await localServer();
+ try {
+ srv.setHandler((_req, res) => res.writeHead(407, { "content-type": "application/problem+json" }).end('{"error":"proxy_authentication_required","status":407}'));
+ const f = forwardFetch(AUTH, { forwardUrl: srv.url, retries: 3, retryDelayMs: 5 });
+ await assert.rejects(
+ () => f("https://v6.ident.me"),
+ (e) => e instanceof WhisperError && e.status === 407 && /propagate/.test(e.message),
+ );
+ assert.equal(srv.calls.length, 3);
+ } finally {
+ await srv.close();
+ }
+});
+
+test("Node path: headers, method, and body reach the gateway intact over the real transport", async () => {
+ const srv = await localServer();
+ try {
+ srv.setHandler((_req, res) => res.writeHead(200).end("ok"));
+ const f = forwardFetch(AUTH, { forwardUrl: srv.url });
+ await f("https://api.example.com/things", { method: "POST", headers: { "content-type": "application/json" }, body: '{"a":1}' });
+ assert.equal(srv.calls.length, 1);
+ const call = srv.calls[0];
+ assert.equal(call.method, "POST");
+ assert.equal(call.headers["authorization"], AUTH);
+ assert.equal(call.headers["x-whisper-target"], "https://api.example.com/things");
+ assert.equal(call.headers["x-whisper-method"], "POST");
+ assert.equal(call.headers["content-type"], "application/json");
+ assert.equal(call.headers["content-length"], "7");
+ assert.equal(call.body, '{"a":1}');
+ } finally {
+ await srv.close();
+ }
+});
+
+test("Node path: a non-407 status (e.g. 502) passes straight through, unretried", async () => {
+ const srv = await localServer();
+ try {
+ let hits = 0;
+ srv.setHandler((_req, res) => { hits++; res.writeHead(502, { "content-type": "application/problem+json" }).end('{"error":"connect_failure","status":502}'); });
+ const f = forwardFetch(AUTH, { forwardUrl: srv.url, retryDelayMs: 5 });
+ const res = await f("https://v6.ident.me");
+ assert.equal(res.status, 502);
+ assert.equal(hits, 1);
+ } finally {
+ await srv.close();
+ }
+});
+
+test("Node path: a genuine connection failure (nothing listening) is a clear WhisperError, not a hang", async () => {
+ const f = forwardFetch(AUTH, { forwardUrl: "http://127.0.0.1:1", retries: 1 });
+ await assert.rejects(() => f("https://v6.ident.me"), (e) => e instanceof WhisperError && e.status === 0);
+});
+
+test("Node path: an explicitly injected `fetch` is honoured verbatim, bypassing the native transport", async () => {
+ const { fn, calls } = sequence([() => problemResponse(502)]);
+ // A real local server would answer 200 here — proving the injected mock (not the server) won.
+ const srv = await localServer();
+ try {
+ srv.setHandler((_req, res) => res.writeHead(200).end("should not be hit"));
+ const f = forwardFetch(AUTH, { fetch: fn, forwardUrl: srv.url });
+ const res = await f("https://v6.ident.me");
+ assert.equal(res.status, 502); // came from the injected mock, not the local server
+ assert.equal(calls.length, 1);
+ assert.equal(srv.calls.length, 0);
+ } finally {
+ await srv.close();
+ }
 });
