@@ -10,10 +10,10 @@
 // The egress bearer returned by `op:connect` is consumed HERE to open the tunnel and is NEVER
 // returned to the caller, logged, or persisted — it lives only inside this module's closures.
 
-import { control } from "./control.js";
-import { WhisperError } from "./http.js";
-import { DEFAULT_FORWARD_URL, forwardFetch } from "./forward.js";
-import type { RequestOptions } from "./types.js";
+import { control } from "./control.ts";
+import { WhisperError } from "./http.ts";
+import { DEFAULT_FORWARD_URL, forwardFetch } from "./forward.ts";
+import type { RequestOptions } from "./types.ts";
 import {
  detectRuntime,
  normaliseRequest,
@@ -21,8 +21,8 @@ import {
  parseProxy,
  supportsNestedTls,
  tunnelHttp,
-} from "./tunnel.js";
-import type { EgressRuntime, ProxyEndpoint, TunnelSocket } from "./tunnel.js";
+} from "./tunnel.ts";
+import type { EgressRuntime, ProxyEndpoint, TunnelSocket } from "./tunnel.ts";
 
 const USER_AGENT = "whisper-edge/0.3";
 

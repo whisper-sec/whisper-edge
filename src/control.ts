@@ -5,11 +5,11 @@
 // CALL whisper.agents({op, args}) — POSTed to graph.whisper.security/api/query. The key
 // is sent as X-API-Key and is NEVER logged or echoed. Pure fetch, zero dependencies.
 
-import { buildAgentsQuery } from "./cypher.js";
-import { decodeEnvelope } from "./envelope.js";
-import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
-import { endpointsFor } from "./keyless.js";
-import type { ControlResult, RequestOptions } from "./types.js";
+import { buildAgentsQuery } from "./cypher.ts";
+import { decodeEnvelope } from "./envelope.ts";
+import { WhisperError, doFetch, parseJson, readCappedText } from "./http.ts";
+import { endpointsFor } from "./keyless.ts";
+import type { ControlResult, RequestOptions } from "./types.ts";
 
 const USER_AGENT = "whisper-edge/0.3";
 

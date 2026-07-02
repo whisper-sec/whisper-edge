@@ -4,8 +4,8 @@
 // The KEYLESS tier: pure HTTPS, no API key, no CLI, no dependencies. Runs anywhere fetch
 // runs. It exposes exactly the same public facts as RDAP, keyed by address/name.
 
-import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
-import type { Endpoints, RdapObject, RequestOptions, ResolvedIdentity, VerifyVerdict } from "./types.js";
+import { WhisperError, doFetch, parseJson, readCappedText } from "./http.ts";
+import type { Endpoints, RdapObject, RequestOptions, ResolvedIdentity, VerifyVerdict } from "./types.ts";
 
 /** Canonical public endpoints. Overridable per call via `opts.endpoints`. */
 export const DEFAULT_ENDPOINTS: Endpoints = {

@@ -49,5 +49,5 @@
   "bugs": { "url": "https://github.com/whisper-sec/whisper-edge/issues" },
   "license": "MIT",
   "author": "Whisper Security",
-  "devDependencies": { "typescript": "^5.6.3" }
+  "devDependencies": { "typescript": "^5.7.2" }
 }

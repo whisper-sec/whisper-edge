@@ -13,7 +13,7 @@
 // in what we ACCEPT — string | URL | Request inputs, both chunked and Content-Length framing,
 // and a clear error (never an opaque hang) on any transport fault.
 
-import { WhisperError } from "./http.js";
+import { WhisperError } from "./http.ts";
 
 /** The runtimes we can open a raw socket on (everything else is fetch-only — see {@link detectRuntime}). */
 export type EgressRuntime = "node" | "deno" | "workers" | "unknown";

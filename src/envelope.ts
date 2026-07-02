@@ -5,7 +5,7 @@
 // control plane may reply in the documented `{ok,status,result,error}` shape, the live
 // Neo4j `{rows:[{result:{...}}]}` wrapper, or a bare RFC-7807 problem — all decode here.
 
-import type { ControlResult, Problem } from "./types.js";
+import type { ControlResult, Problem } from "./types.ts";
 
 interface RawResult {
   columns?: string[];

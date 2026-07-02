@@ -28,9 +28,9 @@
 // Request inputs, any HTTP method, and a persistent 407 surfaces a clear, actionable error
 // instead of an opaque proxy failure.
 
-import { doFetch, WhisperError } from "./http.js";
-import { detectRuntime, normaliseRequest } from "./tunnel.js";
-import type { RequestOptions } from "./types.js";
+import { doFetch, WhisperError } from "./http.ts";
+import { detectRuntime, normaliseRequest } from "./tunnel.ts";
+import type { RequestOptions } from "./types.ts";
 
 /** The canonical fetch-forward gateway. Overridable for pre-prod / self-host. */
 export const DEFAULT_FORWARD_URL = "https://forward.whisper.online/forward";

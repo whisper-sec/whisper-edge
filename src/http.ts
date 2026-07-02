@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 
-import type { Problem, RequestOptions } from "./types.js";
+import type { Problem, RequestOptions } from "./types.ts";
 
 /**
  * The one error type this SDK throws. It carries the RFC-7807 problem fields the control
