@@ -3,6 +3,6 @@
   "name": "whisper-edge-netlify-example",
   "type": "module",
   "dependencies": {
-    "whisper-edge": "^0.2.0"
+    "whisper-edge": "^0.3.0"
   }
 }

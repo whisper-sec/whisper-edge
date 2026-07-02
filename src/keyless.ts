@@ -14,7 +14,7 @@ export const DEFAULT_ENDPOINTS: Endpoints = {
   verify: "https://rdap.whisper.online",
 };
 
-const USER_AGENT = "whisper-edge/0.2";
+const USER_AGENT = "whisper-edge/0.3";
 
 export function endpointsFor(opts?: RequestOptions): Endpoints {
   return { ...DEFAULT_ENDPOINTS, ...(opts?.endpoints ?? {}) };

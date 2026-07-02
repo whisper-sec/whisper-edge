@@ -1,6 +1,6 @@
 {
   "private": true,
-  "name": "whisper-edge-lambda-example",
+  "name": "whisper-edge-vercel-edge-example",
   "type": "module",
   "dependencies": {
     "whisper-edge": "^0.3.0"

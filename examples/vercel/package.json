@@ -3,6 +3,6 @@
   "name": "whisper-edge-vercel-example",
   "type": "module",
   "dependencies": {
-    "whisper-edge": "^0.2.0"
+    "whisper-edge": "^0.3.0"
   }
 }
