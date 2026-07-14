@@ -147,12 +147,13 @@ export class WhisperGraph {
     const o = this.merge(reqOpts);
     const url = endpointsFor(o).flowRun;
 
-    // Map the catalog {slug, inputs, params} contract onto the wire the runner consumes:
-    // the FIRST input is the anchor `value` (or `values` for a bulk list), every other
-    // input and every flow param rides in `paramValues`. We ALSO echo `inputs`/`params`
-    // verbatim, so the body still matches the documented flow contract (forward-compatible
-    // if the runner migrates to reading them). A nullish input is skipped so the flow's own
-    // default applies (Postel: sensible defaults, liberal in what we accept).
+    // The runner's wire contract is {slug, value, paramValues}: `value` is the ONE primary
+    // entity (a host / IP / ASN), or `values` for a bulk list; `paramValues` carries every
+    // other input plus every tuning knob. So the FIRST input becomes the anchor `value`, and
+    // every other input and every flow param rides in `paramValues`. A nullish input is
+    // skipped so the flow's own default applies (Postel: sensible defaults, liberal in what
+    // we accept). We send ONLY the keys the runner reads: an `inputs`/`params` map is
+    // silently ignored, so the flow would fall back to its default anchor.
     const paramValues: Record<string, unknown> = {};
     let value: string | undefined;
     let values: string[] | undefined;
@@ -168,7 +169,10 @@ export class WhisperGraph {
       }
     }
     for (const [k, v] of Object.entries(params)) paramValues[k] = v;
-    const body = { slug, value, values, paramValues, inputs, params };
+    const body: Record<string, unknown> = { slug };
+    if (value !== undefined) body.value = value;
+    if (values !== undefined) body.values = values;
+    if (Object.keys(paramValues).length > 0) body.paramValues = paramValues;
 
     // A flow is a long-lived SSE read, so we drive the timeout + abort ourselves (doFetch's
     // one-shot timeout would abort mid-stream). The clock covers the whole run.

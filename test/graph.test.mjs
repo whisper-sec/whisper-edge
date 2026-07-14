@@ -144,7 +144,11 @@ test("a flow method EXECUTES via the gallery runner and aggregates the SSE strea
   const parsed = JSON.parse(sentBody);
   assert.equal(parsed.slug, "typosquat");
   assert.equal(parsed.value, "paypal.com"); // first input -> anchor value
-  assert.deepEqual(parsed.inputs, { domain: "paypal.com" }); // documented contract echoed
+  // Only the runner's keys are sent (slug/value/paramValues); an inputs/params echo would
+  // be ignored and the flow would fall back to its default anchor, so we never send it.
+  assert.equal(parsed.inputs, undefined);
+  assert.equal(parsed.params, undefined);
+  assert.equal(parsed.paramValues, undefined); // a single-input flow has no extra params
 });
 
 test("a flow's tunable params + extra inputs ride in paramValues (attackPath value+other)", async () => {
