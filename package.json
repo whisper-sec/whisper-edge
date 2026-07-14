@@ -1,6 +1,6 @@
 {
   "name": "whisper-edge",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Dependency-free Whisper agent-identity SDK for serverless & edge runtimes (Cloudflare Workers, Vercel, Deno, Netlify, AWS Lambda, Supabase). Keyless verify/resolve/RDAP, the full control plane with an API key, and REAL egress from an agent's routable /128: in-process sockets where the runtime allows them, a fetch-forward gateway everywhere else.",
   "type": "module",
   "exports": {
@@ -13,9 +13,16 @@
   "types": "./dist/index.d.ts",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
-  "files": ["dist", "README.md", "LICENSE", "logo.png"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "logo.png"
+  ],
   "sideEffects": false,
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "gen:graph": "node scripts/gen-graph.mjs",
     "build": "tsc -p tsconfig.json",
@@ -46,9 +53,16 @@
     "zero-dependency"
   ],
   "homepage": "https://whisper.online",
-  "repository": { "type": "git", "url": "https://github.com/whisper-sec/whisper-edge.git" },
-  "bugs": { "url": "https://github.com/whisper-sec/whisper-edge/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/whisper-sec/whisper-edge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/whisper-sec/whisper-edge/issues"
+  },
   "license": "MIT",
   "author": "Whisper Security",
-  "devDependencies": { "typescript": "^5.6.3" }
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
 }
