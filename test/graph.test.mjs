@@ -100,22 +100,99 @@ test("control(key).graph reaches the same code as graph(key), bound to the same 
   assert.equal(c.graph, c.graph);
 });
 
-test("a flow method surfaces a clear workflow-runner-not-wired WhisperError (501)", async () => {
-  let fetched = false;
-  const g = graph("k", { fetch: async () => { fetched = true; return new Response("{}"); } });
-  await assert.rejects(
-    () => g.attackPath(),
-    (e) => e instanceof WhisperError && e.status === 501 && /workflow runner/i.test(e.message) && /run_workflow \(attack-path\)/.test(e.message),
-  );
-  assert.equal(fetched, false); // a stub never touches the network
+// An SSE stub: returns `blocks` (each an {event,data} pair) as one text/event-stream body.
+function sseStub(blocks, capture, status = 200) {
+  const text = blocks.map((b) => `event: ${b.event}\ndata: ${JSON.stringify(b.data)}\n\n`).join("");
+  return async (url, init) => {
+    if (capture) capture.push({ url: String(url), init, sentBody: init.body, headers: init.headers });
+    return new Response(text, { status, headers: { "content-type": "text/event-stream" } });
+  };
+}
+
+// A representative typosquat run: an anchor graph delta, one step with rows, and complete.
+const TYPOSQUAT_SSE = [
+  { event: "start", data: { slug: "typosquat" } },
+  { event: "graph", data: { stepId: "__anchor", index: -1, delta: { nodes: [{ id: "paypal.com", type: "HOSTNAME", anchor: true }], edges: [] }, anchorIds: ["paypal.com"] } },
+  { event: "step-start", data: { id: "registered", title: "Registered look-alikes", index: 0 } },
+  { event: "step", data: { id: "registered", title: "Registered look-alikes", status: "done", cypher: "CALL whisper.variants($domain) ...", columns: ["variant", "method", "confidence"], rows: [{ variant: "paypad.com", method: "BITSQUATTING", confidence: 0.9 }] } },
+  { event: "graph", data: { stepId: "registered", index: 0, delta: { nodes: [{ id: "paypad.com", type: "HOSTNAME" }], edges: [{ from: "paypal.com", to: "paypad.com", label: "look-alike" }] } } },
+  { event: "complete", data: { slug: "typosquat", totalLatencyMs: 421 } },
+];
+
+test("a flow method EXECUTES via the gallery runner and aggregates the SSE stream", async () => {
+  const calls = [];
+  const g = graph("whisper_live_EXAMPLE", { fetch: sseStub(TYPOSQUAT_SSE, calls) });
+  const res = await g.typosquat("paypal.com");
+  // Aggregated: steps in order, the headline table, and a de-duplicated graph.
+  assert.equal(res.slug, "typosquat");
+  assert.equal(res.steps.length, 1);
+  assert.equal(res.steps[0].id, "registered");
+  assert.equal(res.anchor.id, "registered");
+  assert.deepEqual(res.columns, ["variant", "method", "confidence"]);
+  assert.equal(res.rows[0].variant, "paypad.com");
+  assert.equal(res.graph.nodes.length, 2); // paypal.com (anchor) + paypad.com
+  assert.equal(res.graph.edges.length, 1);
+  assert.equal(res.totalLatencyMs, 421);
+  assert.equal(res.events.length, TYPOSQUAT_SSE.length);
+  assert.equal(res.status, 200);
+  // Wire: POSTed to the flow-run endpoint with X-API-Key (never in the URL); value mapped.
+  const { url, init, sentBody, headers } = calls[0];
+  assert.equal(url, "https://console.whisper.security/api/gallery/run");
+  assert.equal(init.method, "POST");
+  assert.equal(headers["x-api-key"], "whisper_live_EXAMPLE");
+  assert.ok(!url.includes("whisper_live_EXAMPLE"));
+  const parsed = JSON.parse(sentBody);
+  assert.equal(parsed.slug, "typosquat");
+  assert.equal(parsed.value, "paypal.com"); // first input -> anchor value
+  assert.deepEqual(parsed.inputs, { domain: "paypal.com" }); // documented contract echoed
 });
 
-test("submit (direct-but-incomplete) is stubbed toward graph.query()", async () => {
-  const g = graph("k", { fetch: async () => new Response("{}") });
+test("a flow's tunable params + extra inputs ride in paramValues (attackPath value+other)", async () => {
+  const calls = [];
+  const g = graph("k", { fetch: sseStub([{ event: "complete", data: { slug: "attack-path" } }], calls) });
+  const res = await g.attackPath("paypal.com", "paypa1.com", { level: "deep" });
+  assert.equal(res.slug, "attack-path");
+  const parsed = JSON.parse(calls[0].sentBody);
+  assert.equal(parsed.value, "paypal.com"); // first input -> value
+  assert.equal(parsed.paramValues.other, "paypa1.com"); // second input -> paramValues
+  assert.equal(parsed.paramValues.level, "deep"); // tunable param -> paramValues
+});
+
+test("onFlowEvent observes each SSE event as it streams; a throwing observer never breaks the run", async () => {
+  const seen = [];
+  const g = graph("k", {
+    fetch: sseStub(TYPOSQUAT_SSE),
+    onFlowEvent: (event) => { seen.push(event); throw new Error("observer boom"); },
+  });
+  const res = await g.typosquat();
+  assert.deepEqual(seen, ["start", "graph", "step-start", "step", "graph", "complete"]);
+  assert.equal(res.rows[0].variant, "paypad.com"); // run still completed
+});
+
+test("a flow run surfacing an `error` event rejects as a clear WhisperError", async () => {
+  const g = graph("k", { fetch: sseStub([{ event: "error", data: { message: "step 2 timed out" } }]) });
   await assert.rejects(
-    () => g.submit(),
-    (e) => e instanceof WhisperError && e.status === 501 && /graph\.query\(\)/.test(e.message),
+    () => g.attackSurface(),
+    (e) => e instanceof WhisperError && /step 2 timed out/.test(e.message),
   );
+});
+
+test("a flow run non-2xx (AuthRequired) surfaces the JSON problem as a WhisperError", async () => {
+  const g = graph("k", { fetch: stub(401, { error: "AuthRequired", message: "Sign in to run workflows." }) });
+  await assert.rejects(
+    () => g.attackSurface(),
+    (e) => e instanceof WhisperError && e.status === 401 && /Sign in to run workflows/.test(e.message),
+  );
+});
+
+test("submit EXECUTES as a direct verb, POSTing exactly the three params its Cypher binds", async () => {
+  const calls = [];
+  const g = graph("k", { fetch: stub(200, { columns: ["observation_id", "accepted"], rows: [{ observation_id: "obs_1", accepted: true }], statistics: { rowCount: 1 } }, calls) });
+  const res = await g.submit("indicator", "ip", "203.0.113.5");
+  assert.equal(res.rows[0].accepted, true);
+  const parsed = JSON.parse(calls[0].sentBody);
+  assert.equal(parsed.query, "CALL whisper.submit({kind:$kind, identifier_kind:$identifier_kind, value:$value})");
+  assert.deepEqual(parsed.parameters, { kind: "indicator", identifier_kind: "ip", value: "203.0.113.5" });
 });
 
 test("a >=400 status surfaces the server's detail as a WhisperError", async () => {
@@ -124,10 +201,4 @@ test("a >=400 status surfaces the server's detail as a WhisperError", async () =
     () => g.identify(),
     (e) => e instanceof WhisperError && e.status === 403 && e.detail === "scope graph:read required",
   );
-});
-
-test("a multi-param flow method keeps its typed shape (attackPath value+other)", async () => {
-  const g = graph("k", { fetch: async () => new Response("{}") });
-  // Both positional params accepted; still rejects as a 501 stub.
-  await assert.rejects(() => g.attackPath("paypal.com", "paypa1.com"), (e) => e.status === 501);
 });

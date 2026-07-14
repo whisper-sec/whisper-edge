@@ -12,6 +12,7 @@ export const DEFAULT_ENDPOINTS: Endpoints = {
   control: "https://graph.whisper.security/api/query",
   rdap: "https://rdap.whisper.online",
   verify: "https://rdap.whisper.online",
+  flowRun: "https://console.whisper.security/api/gallery/run",
 };
 
 const USER_AGENT = "whisper-edge/0.3";

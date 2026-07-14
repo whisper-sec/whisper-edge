@@ -16,9 +16,17 @@
 // (that one expects array-rows and would silently mangle these results). Pure fetch, zero
 // dependencies.
 
-import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
+import { WhisperError, doFetch, parseJson, readCappedText, resolveFetch } from "./http.js";
 import { endpointsFor } from "./keyless.js";
-import type { GraphParams, GraphResult, GraphStatistics, RequestOptions } from "./types.js";
+import type {
+  FlowParams,
+  FlowResult,
+  FlowStep,
+  GraphParams,
+  GraphResult,
+  GraphStatistics,
+  RequestOptions,
+} from "./types.js";
 
 const USER_AGENT = "whisper-edge/0.3";
 
@@ -46,10 +54,11 @@ function decodeGraph(body: unknown, status: number): GraphResult {
 
 /**
  * The Whisper security graph, authenticated with an owner API key. Every method runs one
- * catalog verb against /api/query and returns a {@link GraphResult}. Direct verbs POST a
- * parameterised Cypher read; flow verbs (multi-step workflows) throw a clear 501 until the
- * workflow runner is exposed here, so nothing blocks. Reachable both standalone via
- * graph(key) and as control(key).graph, bound to the same key.
+ * catalog verb. Direct verbs POST a parameterised Cypher read to /api/query and return a
+ * {@link GraphResult}; flow verbs (multi-step investigations) run through the gallery
+ * runner over SSE and return the aggregated {@link FlowResult}. The raw {@link query}
+ * escape hatch runs arbitrary Cypher. Reachable both standalone via graph(key) and as
+ * control(key).graph, bound to the same key.
  */
 export class WhisperGraph {
   private readonly key: string;
@@ -110,11 +119,227 @@ export class WhisperGraph {
 
   /**
    * The raw escape hatch: run an arbitrary Cypher read against the graph with your own
-   * `params` (bound as $-parameters). KEYED. Use this for any verb this SDK stubs (a flow
-   * workflow, or submit's full field set) or for a query the catalog does not name.
+   * `params` (bound as $-parameters). KEYED. Use this for any query the catalog does not
+   * name, or a bespoke form of a named verb (e.g. a submit `feedback` with the full
+   * optional field set, or an `UNWIND $records` batch submit).
    */
   query(cypher: string, params: GraphParams = {}, reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect(cypher, params, reqOpts);
+  }
+
+  /**
+   * Run a catalog FLOW (a multi-step investigation) through the gallery runner and
+   * aggregate its Server-Sent-Events stream into a {@link FlowResult}. `inputs` are the
+   * flow's typed entities keyed by name; the FIRST is the anchor the graph is built around,
+   * every other input rides in the run's params. `params` are the flow's tunable knobs
+   * (level / depth / instanceType, ...). KEYED: the key travels only as X-API-Key. Pass
+   * `reqOpts.onFlowEvent` to observe each SSE event as it arrives (progressive rendering);
+   * the returned promise still resolves with the full aggregate. An `error` event, or any
+   * >=400, surfaces as a clear WhisperError (Postel: a clear error, never an opaque 500).
+   * The default timeout is 120s (flows are multi-step); override via `reqOpts.timeoutMs`.
+   */
+  async runFlow(
+    slug: string,
+    inputs: Record<string, string | string[]> = {},
+    params: FlowParams = {},
+    reqOpts?: RequestOptions,
+  ): Promise<FlowResult> {
+    const o = this.merge(reqOpts);
+    const url = endpointsFor(o).flowRun;
+
+    // Map the catalog {slug, inputs, params} contract onto the wire the runner consumes:
+    // the FIRST input is the anchor `value` (or `values` for a bulk list), every other
+    // input and every flow param rides in `paramValues`. We ALSO echo `inputs`/`params`
+    // verbatim, so the body still matches the documented flow contract (forward-compatible
+    // if the runner migrates to reading them). A nullish input is skipped so the flow's own
+    // default applies (Postel: sensible defaults, liberal in what we accept).
+    const paramValues: Record<string, unknown> = {};
+    let value: string | undefined;
+    let values: string[] | undefined;
+    let first = true;
+    for (const [name, val] of Object.entries(inputs)) {
+      if (val === undefined || val === null) continue;
+      if (first) {
+        if (Array.isArray(val)) values = val.map((x) => String(x));
+        else value = String(val);
+        first = false;
+      } else {
+        paramValues[name] = val;
+      }
+    }
+    for (const [k, v] of Object.entries(params)) paramValues[k] = v;
+    const body = { slug, value, values, paramValues, inputs, params };
+
+    // A flow is a long-lived SSE read, so we drive the timeout + abort ourselves (doFetch's
+    // one-shot timeout would abort mid-stream). The clock covers the whole run.
+    const f = resolveFetch(o);
+    const timeoutMs = o.timeoutMs ?? 120_000;
+    const ac = new AbortController();
+    const onAbort = () => ac.abort((o.signal as AbortSignal).reason);
+    if (o.signal) {
+      if (o.signal.aborted) ac.abort(o.signal.reason);
+      else o.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const timeoutErr = new WhisperError(`flow ${slug} timed out after ${timeoutMs}ms`, { status: 0 });
+    timer = setTimeout(() => ac.abort(timeoutErr), timeoutMs);
+
+    let resp: Response;
+    try {
+      resp = await f(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "user-agent": USER_AGENT,
+          "x-whisper-client": USER_AGENT,
+          "x-api-key": this.key,
+        },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (o.signal) o.signal.removeEventListener("abort", onAbort);
+      if (err instanceof WhisperError) throw err;
+      if (ac.signal.reason instanceof WhisperError) throw ac.signal.reason;
+      const reason = (ac.signal.reason instanceof Error ? ac.signal.reason.message : undefined) ?? (err as Error)?.message;
+      throw new WhisperError(`flow ${slug} unreachable: ${reason ?? "network error"}`, { status: 0 });
+    }
+
+    try {
+      // A non-2xx is a JSON problem (AuthRequired / FlowNotFound / ...), not an event stream.
+      if (resp.status >= 400) {
+        const text = await readCappedText(resp);
+        const b = (parseJson(text, "flow", resp.status) ?? {}) as Record<string, unknown>;
+        const detail =
+          typeof b.message === "string" ? b.message :
+          typeof b.detail === "string" ? b.detail :
+          `flow returned status ${resp.status}`;
+        throw new WhisperError(detail, {
+          status: resp.status,
+          detail: typeof b.detail === "string" ? b.detail : undefined,
+          title: typeof b.error === "string" ? b.error : undefined,
+        });
+      }
+      return await this.aggregateSse(resp, slug, o);
+    } finally {
+      clearTimeout(timer);
+      if (o.signal) o.signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * Consume an SSE Response into a {@link FlowResult}. A tiny line reader (zero deps): split
+   * the stream on blank lines, read the `event:`/`data:` fields, and fold each event into
+   * the aggregate (steps in order, a de-duplicated graph, the final presentation payload).
+   * Prefers the streaming body reader; falls back to buffering the whole body where a
+   * runtime does not expose a readable stream - both yield the identical aggregate.
+   */
+  private async aggregateSse(resp: Response, slug: string, o: RequestOptions): Promise<FlowResult> {
+    const onEvent = o.onFlowEvent;
+    const events: Array<{ event: string; data: unknown }> = [];
+    const steps: FlowStep[] = [];
+    const graph = { nodes: [] as Array<Record<string, unknown>>, edges: [] as Array<Record<string, unknown>> };
+    const seenNodes = new Set<string>();
+    const seenEdges = new Set<string>();
+    let present: unknown;
+    let totalLatencyMs: number | undefined;
+    let runError: string | undefined;
+
+    const handleBlock = (block: string) => {
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
+      const dataStr = dataLines.join("\n");
+      if (dataStr === "") return;
+      let data: unknown;
+      try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+      events.push({ event, data });
+      // A caller's observer must never break the run.
+      try { onEvent?.(event, data); } catch { /* swallow */ }
+
+      const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+      if (event === "step") {
+        const id = String(d.id ?? "");
+        // The internal presentation step carries the FormatOutput, not a table.
+        if (id === "__present") { present = d.output; return; }
+        steps.push({
+          id,
+          title: typeof d.title === "string" ? d.title : undefined,
+          status: typeof d.status === "string" ? d.status : undefined,
+          cypher: typeof d.cypher === "string" ? d.cypher : undefined,
+          columns: Array.isArray(d.columns) ? d.columns.map((c) => String(c)) : undefined,
+          rows: Array.isArray(d.rows) ? (d.rows as Array<Record<string, unknown>>) : undefined,
+          output: d.output,
+        });
+      } else if (event === "graph") {
+        const delta = (d.delta && typeof d.delta === "object" ? d.delta : {}) as { nodes?: unknown[]; edges?: unknown[] };
+        for (const n of Array.isArray(delta.nodes) ? delta.nodes : []) {
+          const node = (n && typeof n === "object" ? n : {}) as Record<string, unknown>;
+          const nid = String(node.id ?? "");
+          if (nid !== "" && seenNodes.has(nid)) continue;
+          if (nid !== "") seenNodes.add(nid);
+          graph.nodes.push(node);
+        }
+        for (const e of Array.isArray(delta.edges) ? delta.edges : []) {
+          const edge = (e && typeof e === "object" ? e : {}) as Record<string, unknown>;
+          const k = `${edge.from} ${edge.label ?? ""} ${edge.to}`;
+          if (seenEdges.has(k)) continue;
+          seenEdges.add(k);
+          graph.edges.push(edge);
+        }
+      } else if (event === "complete") {
+        if (typeof d.totalLatencyMs === "number") totalLatencyMs = d.totalLatencyMs;
+      } else if (event === "error") {
+        runError = typeof d.message === "string" ? d.message : "flow run failed";
+      }
+    };
+
+    const body = resp.body as ReadableStream<Uint8Array> | null;
+    if (body && typeof body.getReader === "function") {
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const blocks = buf.split("\n\n");
+        buf = blocks.pop() ?? "";
+        for (const b of blocks) if (b.trim() !== "") handleBlock(b);
+      }
+      buf += decoder.decode();
+      if (buf.trim() !== "") handleBlock(buf);
+    } else {
+      const text = await readCappedText(resp);
+      for (const b of text.split("\n\n")) if (b.trim() !== "") handleBlock(b);
+    }
+
+    if (runError !== undefined) throw new WhisperError(`flow ${slug}: ${runError}`, { status: 502 });
+
+    // The headline table is the last step that returned rows; else the last step.
+    let anchor: FlowStep | null = null;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if ((steps[i].rows?.length ?? 0) > 0) { anchor = steps[i]; break; }
+    }
+    if (anchor === null && steps.length > 0) anchor = steps[steps.length - 1];
+
+    return {
+      slug,
+      steps,
+      anchor,
+      columns: anchor?.columns ?? [],
+      rows: anchor?.rows ?? [],
+      graph,
+      present,
+      totalLatencyMs,
+      events,
+      status: resp.status,
+    };
   }
 
   /**
@@ -124,14 +349,15 @@ export class WhisperGraph {
    * letters have in-country DNS_ROOT_INSTANCE anycast nodes, the Global-vs-Local split, the BGP
    * origin ASNs hosting them, and a resilience grade.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (anycast-dns-root-sovereignty).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: distinctLetters, totalInstances, globalCount, localCount, hostingAsns.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (anycast-dns-root-sovereignty) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Tunable params (pass as `params`): instanceType=ALL.
+   * Headline columns: distinctLetters, totalInstances, globalCount, localCount, hostingAsns.
+   *
+   * @see https://www.whisper.security/docs/recipes/compliance
    */
-  anycastDnsRootSovereignty(country: string = "BR", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void country; void reqOpts;
-    return Promise.reject(new WhisperError("anycastDnsRootSovereignty runs via the workflow runner (run_workflow (anycast-dns-root-sovereignty)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  anycastDnsRootSovereignty(country: string = "BR", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("anycast-dns-root-sovereignty", { "country": country }, params, reqOpts);
   }
 
   /**
@@ -140,14 +366,15 @@ export class WhisperGraph {
    * From a starting foothold, finds shared dependencies whose compromise reaches furthest; for
    * any two indicators, traces how they are actually connected.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (attack-path).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: indicator, type, available, cached, found, score, level, explanation, factors, sources, advisory.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (attack-path) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Tunable params (pass as `params`): level=standard.
+   * Headline columns: indicator, type, available, cached, found, score, level, explanation, factors, sources, advisory.
+   *
+   * @see https://www.whisper.security/docs/recipes/attack-path
    */
-  attackPath(value: string = "paypal.com", other: string = "paypa1.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void other; void reqOpts;
-    return Promise.reject(new WhisperError("attackPath runs via the workflow runner (run_workflow (attack-path)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  attackPath(value: string = "paypal.com", other: string = "paypa1.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("attack-path", { "value": value, "other": other }, params, reqOpts);
   }
 
   /**
@@ -156,14 +383,15 @@ export class WhisperGraph {
    * Maps the full external footprint - subdomains, name/mail servers, registrant, third-party
    * services, connected web - and scores the exposure.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (attack-surface).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: indicator, type, available, cached, found, score, level, explanation, factors, sources, advisory.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (attack-surface) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Tunable params (pass as `params`): level=standard.
+   * Headline columns: indicator, type, available, cached, found, score, level, explanation, factors, sources, advisory.
+   *
+   * @see https://www.whisper.security/docs/recipes/pentest-recon
    */
-  attackSurface(domain: string = "github.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void domain; void reqOpts;
-    return Promise.reject(new WhisperError("attackSurface runs via the workflow runner (run_workflow (attack-surface)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  attackSurface(domain: string = "github.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("attack-surface", { "domain": domain }, params, reqOpts);
   }
 
   /**
@@ -172,14 +400,14 @@ export class WhisperGraph {
    * Grades a network on the conflicts/gaps that make route hijacking possible, then traces any
    * conflict to the specific domains and organisations exposed on the affected blocks.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (bgp-hijack-exposure).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: prefix, is_moas, conflicting_asn.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (bgp-hijack-exposure) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: prefix, is_moas, conflicting_asn.
+   *
+   * @see https://www.whisper.security/docs/recipes/bgp-routing
    */
-  bgpHijackExposure(value: string = "AS13335", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void reqOpts;
-    return Promise.reject(new WhisperError("bgpHijackExposure runs via the workflow runner (run_workflow (bgp-hijack-exposure)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  bgpHijackExposure(value: string = "AS13335", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("bgp-hijack-exposure", { "value": value }, params, reqOpts);
   }
 
   /**
@@ -188,14 +416,15 @@ export class WhisperGraph {
    * Maps dependencies in both directions: everything that breaks if the asset fails (SPOFs) and
    * everything it relies on (its own DNS/mail/hosting/network supply chain).
    *
-   * KEYED. Runs via the workflow runner: run_workflow (blast-radius).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: labels, name.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (blast-radius) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Tunable params (pass as `params`): depth=2.
+   * Headline columns: labels, name.
+   *
+   * @see https://www.whisper.security/docs/recipes/soc
    */
-  blastRadius(indicator: string = "ns1.dreamhost.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void indicator; void reqOpts;
-    return Promise.reject(new WhisperError("blastRadius runs via the workflow runner (run_workflow (blast-radius)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  blastRadius(indicator: string = "ns1.dreamhost.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("blast-radius", { "indicator": indicator }, params, reqOpts);
   }
 
   /**
@@ -204,14 +433,14 @@ export class WhisperGraph {
    * One-pass takedown package: reputation verdict, owner (WHOIS), abuse-list listings, and
    * surrounding infrastructure, laid out ready to hand to a registrar/host.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (build-takedown-evidence-package).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: indicator, type, available, cached, found, score, level, explanation, factors, sources, advisory.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (build-takedown-evidence-package) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: indicator, type, available, cached, found, score, level, explanation, factors, sources, advisory.
+   *
+   * @see https://www.whisper.security/docs/recipes/threat-intel
    */
-  buildTakedownEvidencePackage(domain: string = "ickaoex.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void domain; void reqOpts;
-    return Promise.reject(new WhisperError("buildTakedownEvidencePackage runs via the workflow runner (run_workflow (build-takedown-evidence-package)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  buildTakedownEvidencePackage(domain: string = "ickaoex.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("build-takedown-evidence-package", { "domain": domain }, params, reqOpts);
   }
 
   /**
@@ -220,14 +449,14 @@ export class WhisperGraph {
    * Maps externally visible AI/agent hosts (API, model, agent) from the outside via heuristic
    * hostname patterns (api./mcp./ai./vector./llm./agent./chat./copilot.). Best-effort leads.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (discover-ai-agent-infrastructure).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: hostname, ips.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (discover-ai-agent-infrastructure) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: hostname, ips.
+   *
+   * @see https://www.whisper.security/docs/recipes/pentest-recon
    */
-  discoverAiAgentInfrastructure(value: string = "github.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void reqOpts;
-    return Promise.reject(new WhisperError("discoverAiAgentInfrastructure runs via the workflow runner (run_workflow (discover-ai-agent-infrastructure)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  discoverAiAgentInfrastructure(value: string = "github.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("discover-ai-agent-infrastructure", { "value": value }, params, reqOpts);
   }
 
   /**
@@ -237,14 +466,14 @@ export class WhisperGraph {
    * CDN, neighbouring infra), threat-checks each node, never inherits maliciousness from shared
    * infra; labelled posture, no score.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (indicator).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: host, label, band, sub_labels, coverage, evidence.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (indicator) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: host, label, band, sub_labels, coverage, evidence.
+   *
+   * @see https://www.whisper.security/docs/recipes/soc
    */
-  indicator(indicator: string = "theblackservicenetwork.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void indicator; void reqOpts;
-    return Promise.reject(new WhisperError("indicator runs via the workflow runner (run_workflow (indicator)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  indicator(indicator: string = "theblackservicenetwork.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("indicator", { "indicator": indicator }, params, reqOpts);
   }
 
   /**
@@ -253,14 +482,14 @@ export class WhisperGraph {
    * Fills the picture for one indicator: registrant (WHOIS), hosting + country, mail/name
    * servers, network behind it, reputation read.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (indicator-enrichment).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: attribute, value.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (indicator-enrichment) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: attribute, value.
+   *
+   * @see https://www.whisper.security/docs/recipes/dns-email
    */
-  indicatorEnrichment(value: string = "google.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void reqOpts;
-    return Promise.reject(new WhisperError("indicatorEnrichment runs via the workflow runner (run_workflow (indicator-enrichment)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  indicatorEnrichment(value: string = "google.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("indicator-enrichment", { "value": value }, params, reqOpts);
   }
 
   /**
@@ -269,14 +498,15 @@ export class WhisperGraph {
    * Works out the true operator (even behind privacy WHOIS), de-cloaks CDN-fronted sites to real
    * servers, pivots to the rest of that owner's estate across every layer.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (infrastructure-mapping).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: canonical_name, vendor_id, category, roles, host_class.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (infrastructure-mapping) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Tunable params (pass as `params`): level=standard.
+   * Headline columns: canonical_name, vendor_id, category, roles, host_class.
+   *
+   * @see https://www.whisper.security/docs/recipes/compliance
    */
-  infrastructureMapping(value: string = "cloudflare.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void reqOpts;
-    return Promise.reject(new WhisperError("infrastructureMapping runs via the workflow runner (run_workflow (infrastructure-mapping)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  infrastructureMapping(value: string = "cloudflare.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("infrastructure-mapping", { "value": value }, params, reqOpts);
   }
 
   /**
@@ -285,14 +515,14 @@ export class WhisperGraph {
    * Grades how concentrated infra is - too much riding on one provider/region/data-centre/cable
    * landing - surfacing SPOFs for resilience and DORA/NIS2 fourth-party risk.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (map-supply-chain-concentration).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: provider, asn, region, country.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (map-supply-chain-concentration) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: provider, asn, region, country.
+   *
+   * @see https://www.whisper.security/docs/recipes/compliance
    */
-  mapSupplyChainConcentration(domain: string = "atlassian.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void domain; void reqOpts;
-    return Promise.reject(new WhisperError("mapSupplyChainConcentration runs via the workflow runner (run_workflow (map-supply-chain-concentration)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  mapSupplyChainConcentration(domain: string = "atlassian.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("map-supply-chain-concentration", { "domain": domain }, params, reqOpts);
   }
 
   /**
@@ -301,14 +531,14 @@ export class WhisperGraph {
    * Audits delegation, flags stale/mismatched/lame nameservers, sizes each provider's share,
    * surfaces registry facts - catches delegation weakness before exploit.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (nameserver-hijack-dns-consistency).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: nameserver, ips, status.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (nameserver-hijack-dns-consistency) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: nameserver, ips, status.
+   *
+   * @see https://www.whisper.security/docs/recipes/dns-email
    */
-  nameserverHijackDnsConsistency(value: string = "google.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void reqOpts;
-    return Promise.reject(new WhisperError("nameserverHijackDnsConsistency runs via the workflow runner (run_workflow (nameserver-hijack-dns-consistency)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  nameserverHijackDnsConsistency(value: string = "google.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("nameserver-hijack-dns-consistency", { "value": value }, params, reqOpts);
   }
 
   /**
@@ -317,14 +547,14 @@ export class WhisperGraph {
    * Health card for a network/block: what it announces, peers/transit, single-upstream lean,
    * RPKI protection - the one-look reach & resilience report.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (route-health).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: prefix, multi_origin, anycast, withdrawn.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (route-health) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: prefix, multi_origin, anycast, withdrawn.
+   *
+   * @see https://www.whisper.security/docs/recipes/bgp-routing
    */
-  routeHealth(target: string = "1.1.1.0/24", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void target; void reqOpts;
-    return Promise.reject(new WhisperError("routeHealth runs via the workflow runner (run_workflow (route-health)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  routeHealth(target: string = "1.1.1.0/24", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("route-health", { "target": target }, params, reqOpts);
   }
 
   /**
@@ -334,14 +564,14 @@ export class WhisperGraph {
    * no longer resolves) so you can reclaim/remove before someone else does. CNAME layer is
    * prod-ahead.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (subdomain-takeover).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: subdomain, ips.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (subdomain-takeover) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: subdomain, ips.
+   *
+   * @see https://www.whisper.security/docs/recipes/pentest-recon
    */
-  subdomainTakeover(value: string = "github.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void value; void reqOpts;
-    return Promise.reject(new WhisperError("subdomainTakeover runs via the workflow runner (run_workflow (subdomain-takeover)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  subdomainTakeover(value: string = "github.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("subdomain-takeover", { "value": value }, params, reqOpts);
   }
 
   /**
@@ -350,14 +580,14 @@ export class WhisperGraph {
    * Finds registered impersonations across misspellings/risky TLDs, separates your own defensive
    * domains from strangers', flags fresh/privacy/abuse-listed ones into a prioritised list.
    *
-   * KEYED. Runs via the workflow runner: run_workflow (typosquat).
-   * Not yet exposed as a raw Cypher read over /api/query, so this method
-   * throws a clear WhisperError (501). Use graph.query() for a direct read.
-   * When wired it will return columns: variant, method, confidence.
+   * KEYED. Multi-step FLOW: runs via the gallery runner (typosquat) over
+   * SSE and aggregates the streamed steps into a FlowResult.
+   * Headline columns: variant, method, confidence.
+   *
+   * @see https://www.whisper.security/docs/recipes/brand-protection
    */
-  typosquat(domain: string = "paypal.com", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void domain; void reqOpts;
-    return Promise.reject(new WhisperError("typosquat runs via the workflow runner (run_workflow (typosquat)), not a raw Cypher read; it is not yet exposed over /api/query. Use the console/agent run endpoint, or graph.query() for a direct read.", { status: 501 }));
+  typosquat(domain: string = "paypal.com", params: FlowParams = {}, reqOpts?: RequestOptions): Promise<FlowResult> {
+    return this.runFlow("typosquat", { "domain": domain }, params, reqOpts);
   }
 
   /**
@@ -368,6 +598,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.identify([$v]) YIELD host, vendor_id, canonical_name, category, roles, host_class, band
    * Returns columns: host, vendor_id, canonical_name, category, roles, host_class, band.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/identify
    */
   identify(v: string = "api.openai.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.identify([$v]) YIELD host, vendor_id, canonical_name, category, roles, host_class, band", { v: v }, reqOpts);
@@ -381,6 +613,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.assess([$v]) YIELD host, label, band, sub_labels, coverage, evidence
    * Returns columns: host, label, band, sub_labels, coverage, evidence.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures
    */
   assess(v: string = "8.8.8.8", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.assess([$v]) YIELD host, label, band, sub_labels, coverage, evidence", { v: v }, reqOpts);
@@ -394,6 +628,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.variants($v) YIELD variant, method, exists, confidence
    * Returns columns: variant, method, exists, confidence.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/variants
    */
   variants(v: string = "paypal.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.variants($v) YIELD variant, method, exists, confidence", { v: v }, reqOpts);
@@ -408,6 +644,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.walk($v) YIELD coverage, host, nearest_known_vendors, no_atlas_match, siblings
    * Returns columns: coverage, host, nearest_known_vendors, no_atlas_match, siblings.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures
    */
   walk(v: string = "cloudflare.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.walk($v) YIELD coverage, host, nearest_known_vendors, no_atlas_match, siblings", { v: v }, reqOpts);
@@ -422,6 +660,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.explain($v) YIELD indicator, score, level, explanation, sources
    * Returns columns: indicator, score, level, explanation, sources.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/explain
    */
   explain(v: string = "paypal.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.explain($v) YIELD indicator, score, level, explanation, sources", { v: v }, reqOpts);
@@ -435,6 +675,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.psl.tldPlusOne($v) YIELD apex
    * Returns columns: apex.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/helpers
    */
   pslTldplusone(v: string = "www.foo.co.uk", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.psl.tldPlusOne($v) YIELD apex", { v: v }, reqOpts);
@@ -448,6 +690,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.psl.affiliation($v) YIELD found, suffix, submitterOrg, submitterLogin, evidenceKind, confidence
    * Returns columns: found, suffix, submitterOrg, submitterLogin, evidenceKind, confidence.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/helpers
    */
   pslAffiliation(v: string = "paypal.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.psl.affiliation($v) YIELD found, suffix, submitterOrg, submitterLogin, evidenceKind, confidence", { v: v }, reqOpts);
@@ -461,6 +705,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.origins($v) YIELD ip, confidence, methods, asn, asnName, kind
    * Returns columns: ip, confidence, methods, asn, asnName, kind.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/origins
    */
   origins(v: string = "cloudflare.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.origins($v) YIELD ip, confidence, methods, asn, asnName, kind", { v: v }, reqOpts);
@@ -474,6 +720,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.history($v)
    * Returns columns: indicator, type, queryTime, createDate, updateDate, expiryDate, registrar, registrant, country, nameServers, cached.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/history
    */
   history(v: string = "paypal.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.history($v)", { v: v }, reqOpts);
@@ -487,6 +735,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.history.whois($v) YIELD queryTime, createDate, updateDate, expiryDate, registrar, registrant, country, nameServers
    * Returns columns: queryTime, createDate, updateDate, expiryDate, registrar, registrant, country, nameServers.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/history
    */
   historyWhois(v: string = "paypal.com", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.history.whois($v) YIELD queryTime, createDate, updateDate, expiryDate, registrar, registrant, country, nameServers", { v: v }, reqOpts);
@@ -501,6 +751,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.asSet($v) YIELD asSetName, memberAsn, sourceRir
    * Returns columns: asSetName, memberAsn, sourceRir.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures
    */
   asset(v: string = "AS-CLOUDFLARE", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.asSet($v) YIELD asSetName, memberAsn, sourceRir", { v: v }, reqOpts);
@@ -514,6 +766,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL whisper.lookupTorRelay($v) YIELD indicator, found, fingerprint, exitAddressCount, source, ingestedAt
    * Returns columns: indicator, found, fingerprint, exitAddressCount, source, ingestedAt.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/procedures/helpers
    */
   lookupTorRelay(v: string = "185.220.101.33", reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL whisper.lookupTorRelay($v) YIELD indicator, found, fingerprint, exitAddressCount, source, ingestedAt", { v: v }, reqOpts);
@@ -527,6 +781,8 @@ export class WhisperGraph {
    *
    * KEYED. Cypher: CALL db.schema()
    * Returns columns: type, name, count, description, example, sourceLabels, targetLabels, fastPatterns, slowPatterns, bestPractices.
+   *
+   * @see https://www.whisper.security/docs/whisper-graph/schema
    */
   dbSchema(reqOpts?: RequestOptions): Promise<GraphResult> {
     return this.runDirect("CALL db.schema()", {}, reqOpts);
@@ -538,13 +794,13 @@ export class WhisperGraph {
    * The write channel: submit an indicator/feedback with an attributable API key (anonymous
    * submits are refused to preserve K-anonymity). Keyed-only by design.
    *
-   * KEYED. The full parameter set for this write is not yet enumerated in the
-   * catalog, so this method throws a clear WhisperError (501). Use graph.query()
-   * with your own Cypher, or the console run endpoint.
+   * KEYED. Cypher: CALL whisper.submit({kind:$kind, identifier_kind:$identifier_kind, value:$value})
+   * Returns columns: observation_id, kind, accepted, idempotent, promotion_state, k_bucket, advisory, v.
+   *
+   * @see https://www.whisper.security/docs/cypher-api
    */
-  submit(kind: string = "indicator", reqOpts?: RequestOptions): Promise<GraphResult> {
-    void kind; void reqOpts;
-    return Promise.reject(new WhisperError("submit: the full parameter set for this call is not yet enumerated in the catalog. Use graph.query() with your own Cypher, or the console run endpoint.", { status: 501 }));
+  submit(kind: string = "indicator", identifier_kind: string = "ip", value: string = "203.0.113.5", reqOpts?: RequestOptions): Promise<GraphResult> {
+    return this.runDirect("CALL whisper.submit({kind:$kind, identifier_kind:$identifier_kind, value:$value})", { kind: kind, identifier_kind: identifier_kind, value: value }, reqOpts);
   }
 }
 
