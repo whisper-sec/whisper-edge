@@ -48,4 +48,7 @@ export type {
  GraphResult,
  GraphParams,
  GraphStatistics,
+ FlowParams,
+ FlowStep,
+ FlowResult,
 } from "./types.js";

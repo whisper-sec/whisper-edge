@@ -13,6 +13,8 @@ export interface Endpoints {
   rdap: string;
   /** Public verify base: GET `/verify-identity?ip=<addr>`. */
   verify: string;
+  /** Catalog FLOW runner: POST `{slug, inputs, params}` + an API key; result streams over SSE. */
+  flowRun: string;
 }
 
 /**
@@ -29,6 +31,12 @@ export interface RequestOptions {
   fetch?: typeof fetch;
   /** Override any endpoint (pre-prod / self-host). */
   endpoints?: Partial<Endpoints>;
+  /**
+   * Observe each Server-Sent-Event of a FLOW run as it arrives (progressive rendering).
+   * The returned promise still resolves with the full aggregate; an observer that throws
+   * is swallowed so it can never break the run.
+   */
+  onFlowEvent?: (event: string, data: unknown) => void;
 }
 
 /**
@@ -117,5 +125,61 @@ export interface GraphResult {
   /** The verbatim JSON body the server returned (no field loss). */
   raw: unknown;
   /** The (effective) HTTP status. */
+  status: number;
+}
+
+/**
+ * User-tunable FLOW parameters (e.g. `level`, `depth`, `instanceType`), keyed by name.
+ * Merged over the flow's declared defaults and coerced server-side; a value is bound,
+ * never spliced into a query.
+ */
+export type FlowParams = Record<string, string | number | boolean | string[]>;
+
+/** One step of a catalog FLOW run - a `step` SSE event, in the order the runner emitted it. */
+export interface FlowStep {
+  /** The step id (a flow-local slug, e.g. "verdict", "registered"). */
+  id: string;
+  /** Human title, when the step carries one. */
+  title?: string;
+  /** Terminal status the runner reported (e.g. "done"). */
+  status?: string;
+  /** The Cypher this step ran (present on query steps). */
+  cypher?: string;
+  /** Column names for this step's table, in order. */
+  columns?: string[];
+  /** This step's rows, each an object keyed by column name. */
+  rows?: Array<Record<string, unknown>>;
+  /** A structured presentation payload, when the step produced one. */
+  output?: unknown;
+  [k: string]: unknown;
+}
+
+/**
+ * The aggregated result of a catalog FLOW (a multi-step investigation) run through the
+ * gallery runner over SSE. `steps` is every step in order; `columns`/`rows` are the
+ * headline table (the last step that returned rows) for a quick read; `graph` is the
+ * unioned node/edge picture the runner streamed; `present` is the runner's final
+ * presentation payload, if any; `events` is the verbatim SSE record (no field loss).
+ */
+export interface FlowResult {
+  /** The flow slug that ran. */
+  slug: string;
+  /** Every `step` event, in order (the internal `__present` step is folded into `present`). */
+  steps: FlowStep[];
+  /** The headline step (the last one that returned rows), or null if none did. */
+  anchor: FlowStep | null;
+  /** The headline table's columns (from `anchor`). */
+  columns: string[];
+  /** The headline table's rows (from `anchor`), each keyed by column name. */
+  rows: Array<Record<string, unknown>>;
+  /** The unioned graph the runner streamed (nodes + edges, de-duplicated). */
+  graph: { nodes: Array<Record<string, unknown>>; edges: Array<Record<string, unknown>> };
+  /** The runner's final presentation payload (the `__present` step's output), if any. */
+  present?: unknown;
+  /** Total server-side run latency, when the `complete` event reported it. */
+  totalLatencyMs?: number;
+  /** The verbatim SSE event record: every `{event, data}` in order (no field loss). */
+  events: Array<{ event: string; data: unknown }>;
+  /** The (effective) HTTP status of the run request. */
   status: number;
 }

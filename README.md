@@ -73,6 +73,34 @@ await c.logs({ kind: "dns", from: "-1h", limit: 200 }); // recent activity
 await c.revoke("scout"); // withdraw the /128, PTR, tokens, and key
 ```
 
+### Graph: the Whisper security graph
+
+```ts
+import { graph } from "whisper-edge";
+
+const g = graph(process.env.WHISPER_API_KEY!); // or: control(key).graph (same key, same auth)
+
+// Named recipes from the catalog, one typed method each:
+await g.identify("api.openai.com"); // → { canonical_name: "Cloudflare", category: "cdn", roles, ... }
+await g.assess("8.8.8.8"); // → threat posture: label, band, sub_labels, coverage, evidence
+await g.history("example.com"); // → passive-DNS / WHOIS history, and 12 more direct verbs
+
+// A raw Cypher escape hatch (params bound as $-parameters, never spliced):
+await g.query("RETURN 1 AS n"); // → { columns: ["n"], rows: [{ n: 1 }], statistics }
+
+// Multi-step FLOWS run through the gallery runner over SSE, aggregated into a FlowResult:
+const surface = await g.attackSurface("github.com", { level: "quick" });
+surface.steps; // every step in order · surface.rows/columns → the headline table
+surface.graph; // the unioned node/edge picture · surface.present → the runner's summary
+// Watch it stream: g.attackSurface("github.com", {}, { onFlowEvent: (ev, data) => ... })
+```
+
+The graph is **Cypher, so it is keyed** (it rides the same `X-API-Key` auth path as the control
+plane). Every method's JSDoc links to its reference page under
+**[whisper.security/docs](https://www.whisper.security/docs)**. There are **14 direct verbs**
+(one parameterised Cypher read each, returning a `GraphResult`), **15 flows** (multi-step
+investigations, returning a `FlowResult`), and `query()` for anything the catalog does not name.
+
 ### Egress: route traffic out through an agent's /128
 
 ```ts
@@ -186,6 +214,7 @@ await agentEgress(key, undefined, { tier: "socks5", timeoutMs: 20000 });
 
 Keyless: `verify` · `verifyDetails` · `resolve` · `rdap` · `rdapDomain`
 Control: `control(apiKey)` → `register` · `identity` · `list` · `agent` · `policy` · `logs` · `connect` · `revoke` · `agents(op, args)` · `query(cypher)`
+Graph: `graph(apiKey)` (or `control(apiKey).graph`) → 14 direct verbs (`identify` · `assess` · `variants` · `walk` · `explain` · `origins` · `history` · `historyWhois` · `asset` · `submit` · ...) · 15 flows (`attackSurface` · `attackPath` · `typosquat` · `blastRadius` · ...) · `query(cypher)` raw · `runFlow(slug, inputs, params)`
 Egress: `agentEgress(apiKey, selector?, opts?)` → `{ fetch, transport, connect, close }` · `detectRuntime()`
 Low-level: `buildAgentsQuery` · `escapeCypherString` · `decodeEnvelope` · `WhisperError`
 
