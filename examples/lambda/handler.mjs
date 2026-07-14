@@ -2,8 +2,8 @@
 // Whisper on AWS Lambda (Node 18+, Function URL or API Gateway).  npm i whisper-edge
 //   KEYLESS: GET /?addr=<agent /128>
 //   EGRESS:  GET /?egress            → fetch the source-IP echo THROUGH your agent's /128 (needs a key)
-//   CONTROL: GET /?op=list           (set the WHISPER_API_KEY env var — a Secrets Manager ref is best)
-// Egress runs on Node's built-in net/tls CONNECT tunnel (bearer encrypted to the proxy) — no CLI, no local proxy.
+//   CONTROL: GET /?op=list           (set the WHISPER_API_KEY env var; a Secrets Manager ref is best)
+// Egress runs on Node's built-in net/tls CONNECT tunnel (bearer encrypted to the proxy): no CLI, no local proxy.
 import { resolve, rdap, control, agentEgress } from "whisper-edge";
 
 const ECHO = "https://rdap.whisper.online/egress-ip";

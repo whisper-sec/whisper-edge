@@ -2,7 +2,7 @@
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
 // Faithful port of the Whisper CLI's Cypher literal builder. Robustness Principle
-// (RFC 761): conservative in what we EMIT — every leaf string is escaped so a value can
+// (RFC 761): conservative in what we EMIT - every leaf string is escaped so a value can
 // never break out of the surrounding map/list, however hostile the input.
 
 /**
@@ -42,7 +42,7 @@ export function lit(v: unknown): string {
       if (Array.isArray(v)) return "[" + v.map(lit).join(",") + "]";
       return cypherMap(v as Record<string, unknown>);
     default:
-      // Anything unrecognised is rendered as its string form, quoted — never injectable.
+      // Anything unrecognised is rendered as its string form, quoted - never injectable.
       return quoteCypherString(String(v));
   }
 }

@@ -3,5 +3,5 @@ main = "worker.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Optional — the control tier. Set the secret (never commit it):
+# Optional: the control tier. Set the secret (never commit it):
 #   wrangler secret put WHISPER_API_KEY

@@ -2,5 +2,5 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
-# Optional — the control tier. Set it (never commit it):
+# Optional: the control tier. Set it (never commit it):
 #   netlify env:set WHISPER_API_KEY <your whisper_live_ key>

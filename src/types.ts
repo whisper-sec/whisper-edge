@@ -4,7 +4,7 @@
 /**
  * Canonical Whisper endpoints. `control` is the ONE control-plane surface (it takes an
  * API key); `rdap` and `verify` are the public, KEYLESS surfaces. Every field is
- * overridable (Postel: liberal in what we accept — but a sane zero-config default).
+ * overridable (Postel: liberal in what we accept - but a sane zero-config default).
  */
 export interface Endpoints {
   /** Control plane: POST here with `{query}` + an API key. */
@@ -16,7 +16,7 @@ export interface Endpoints {
 }
 
 /**
- * Per-call knobs. All optional — the common case is zero-config. `fetch` lets you inject
+ * Per-call knobs. All optional - the common case is zero-config. `fetch` lets you inject
  * a runtime's fetch (or a mock in tests); by default the global `fetch` is used, which
  * exists in every target runtime (Workers, Deno, Vercel, Netlify, Lambda 18+, Supabase).
  */
@@ -34,7 +34,7 @@ export interface RequestOptions {
 /**
  * The full server-side verdict from the KEYLESS verify surface: the whole Whisper-agent
  * trust chain (reverse-DNS PTR + forward-confirm AAAA + the DANE-EE TLSA pin + the JWS
- * identity doc) folded into one answer. `dane_ok` is the load-bearing field — DANE
+ * identity doc) folded into one answer. `dane_ok` is the load-bearing field - DANE
  * (DNSSEC-anchored TLSA) is the trust anchor for an agent cert, not a public CA.
  */
 export interface VerifyVerdict {
@@ -51,7 +51,7 @@ export interface VerifyVerdict {
   [k: string]: unknown;
 }
 
-/** A folded, friendly identity view — the ergonomic result of `resolve()`. */
+/** A folded, friendly identity view - the ergonomic result of `resolve()`. */
 export interface ResolvedIdentity {
   address: string;
   isWhisperAgent: boolean;
@@ -65,7 +65,7 @@ export interface ResolvedIdentity {
   rdapUrl: string;
 }
 
-/** An RDAP object (RFC 9083) — a stable, public JSON schema returned verbatim. */
+/** An RDAP object (RFC 9083) - a stable, public JSON schema returned verbatim. */
 export type RdapObject = Record<string, unknown>;
 
 /** The RFC-7807 problem the control plane returns on failure. */
@@ -81,10 +81,41 @@ export interface Problem {
 export interface ControlResult {
   columns: string[];
   rows: unknown[][];
-  /** Column-keyed maps, one per row — the form you usually read. */
+  /** Column-keyed maps, one per row - the form you usually read. */
   records: Array<Record<string, unknown>>;
   /** The verbatim JSON body the server returned (no field loss). */
   raw: unknown;
   /** The (effective) HTTP/envelope status. */
+  status: number;
+}
+
+/** Cypher $-parameters, keyed by name, for a graph query (values are bound, never spliced). */
+export type GraphParams = Record<string, unknown>;
+
+/** Query statistics the graph endpoint returns alongside the rows. */
+export interface GraphStatistics {
+  /** Number of rows in the result. */
+  rowCount?: number;
+  /** Server-side execution time in milliseconds. */
+  executionTimeMs?: number;
+  [k: string]: unknown;
+}
+
+/**
+ * A result from the KEYED graph endpoint (POST /api/query). Unlike {@link ControlResult},
+ * the graph envelope returns each row as an OBJECT keyed by column name, so `rows` here is
+ * an array of column-keyed maps (read them directly). `columns` preserves column order,
+ * `statistics` carries the row count + timing, and `raw` is the verbatim body (no loss).
+ */
+export interface GraphResult {
+  /** Column names in order. */
+  columns: string[];
+  /** One column-keyed map per row (the graph envelope's native, object-row shape). */
+  rows: Array<Record<string, unknown>>;
+  /** Row count + execution time reported by the server. */
+  statistics: GraphStatistics;
+  /** The verbatim JSON body the server returned (no field loss). */
+  raw: unknown;
+  /** The (effective) HTTP status. */
   status: number;
 }

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Whisper on Vercel Edge Functions — agent identity AND real egress, from a fetch-only sandbox.
+// Whisper on Vercel Edge Functions: agent identity AND real egress, from a fetch-only sandbox.
 // KEYLESS: GET /api/whisper?addr=<agent /128>
 // EGRESS: GET /api/whisper?egress → fetch the source-IP echo THROUGH your agent's /128 (needs a key)
 // CONTROL: GET /api/whisper?op=list (set WHISPER_API_KEY in Vercel env vars)
-// The Edge runtime has no raw-socket API (no node:net, no Deno.connect, no cloudflare:sockets) —
+// The Edge runtime has no raw-socket API (no node:net, no Deno.connect, no cloudflare:sockets):
 // agentEgress detects that and AUTOMATICALLY routes egress.fetch through the fetch-forward
 // gateway instead. No config, no separate code path: this is the exact same call as the
 // Node example, just running somewhere a raw CONNECT tunnel is impossible.
@@ -25,7 +25,7 @@ export default async function handler(req: Request): Promise<Response> {
  agent: egress.transport.address,
  observedSourceIP: observed.ip,
  egressedFromYourAgent: observed.ip === egress.transport.address,
- transport: egress.transport, // { tier, fqdn, runtime:"unknown", mechanism:"fetch-forward gateway…", tokenProtected }
+ transport: egress.transport, // { tier, fqdn, runtime:"unknown", mechanism:"fetch-forward gateway...", tokenProtected }
  });
  }
 

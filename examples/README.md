@@ -16,7 +16,7 @@ platform's secrets.
 
 > **Deploy status:** the Vercel/Netlify/Cloudflare account-hosted deploys of these samples are
 > pending (they need account access this SDK's maintainers don't have on hand yet). Every
-> transport a sample calls into — including the Vercel Edge fetch-forward path — is proven
+> transport a sample calls into (including the Vercel Edge fetch-forward path) is proven
 > end-to-end against the live gateway by the SDK's own test suite and a real e2e run from a plain
 > Node process; the examples exercise the identical `agentEgress()`/`resolve()` calls.
 
@@ -28,33 +28,33 @@ Each sample answers three requests:
  your `/128`:
 
  ```json
- { "agent": "2a04:2a01:…", "observedSourceIP": "2a04:2a01:…", "egressedFromYourAgent": true,
- "transport": { "tier": "socks5", "fqdn": "…", "runtime": "workers", "tokenProtected": false,
+ { "agent": "2a04:2a01:...", "observedSourceIP": "2a04:2a01:...", "egressedFromYourAgent": true,
+ "transport": { "tier": "socks5", "fqdn": "...", "runtime": "workers", "tokenProtected": false,
  "mechanism": "cloudflare:sockets CONNECT tunnel" } }
  ```
 
 - **Control** (with a key): `GET ?op=list` → your agents (confined to your tenant).
 
-> The API key lives in the platform's secret store — never in code, never in a query string,
+> The API key lives in the platform's secret store: never in code, never in a query string,
 > never logged. The per-agent egress bearer is used in-process only and is never returned or
 > logged. Get a key at <https://whisper.online>.
 
 **Runtime notes.** On Node (Lambda, Vercel Node, Netlify Functions), Deno (Deno Deploy, Supabase
 Edge), and Cloudflare Workers, egress opens a raw CONNECT-tunnel socket. **Fetch-only sandboxes**
 (the Vercel *Edge* runtime, Netlify *Edge*, and anything else with no raw-socket API) have no
-socket to open — `agentEgress` detects this and automatically routes `egress.fetch` through the
+socket to open, so `agentEgress` detects this and automatically routes `egress.fetch` through the
 **fetch-forward gateway** (`forward.whisper.online/forward`,) instead: the exact same call,
 a different transport underneath, zero config either way. On Node the egress bearer is encrypted
 to the proxy (nested TLS); on Deno/Workers, which cannot nest TLS, the CONNECT preamble rides the
 clear leg to the proxy (`tokenProtected: false`); on fetch-forward the credential rides inside the
 plain HTTPS session to the gateway (`tokenProtected: true`). A freshly-minted token can take up to
-~45s to reach every gateway node — `agentEgress` retries a 407 automatically with a short, capped
+~45s to reach every gateway node, so `agentEgress` retries a 407 automatically with a short, capped
 backoff, so this is invisible in the common case.
 
 Local sanity check with Deno (no deploy needed):
 
 ```bash
-export WHISPER_API_KEY=whisper_live_… # optional — enables ?egress and ?op
+export WHISPER_API_KEY=whisper_live_... # optional: enables ?egress and ?op
 deno run --allow-net --allow-env examples/deno/main.ts
 # then: curl 'http://localhost:8000/?addr=<an agent /128>'
 # curl 'http://localhost:8000/?egress' # see your traffic leave from your /128

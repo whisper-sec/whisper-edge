@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Whisper on Deno Deploy — agent identity AND real egress at the edge.
+// Whisper on Deno Deploy: agent identity AND real egress at the edge.
 //   Deploy:  deployctl deploy --project=<p> main.ts     Local:  deno run --allow-net --allow-env main.ts
 //   KEYLESS: GET /?addr=<agent /128>
 //   EGRESS:  GET /?egress            → fetch the source-IP echo THROUGH your agent's /128 (needs a key)
 //   CONTROL: GET /?op=list           (set WHISPER_API_KEY: deployctl ... --env WHISPER_API_KEY=...)
-// Egress runs on Deno.connect + Deno.startTls — in-process, no CLI, no local proxy.
+// Egress runs on Deno.connect + Deno.startTls: in-process, no CLI, no local proxy.
 import { resolve, rdap, control, agentEgress } from "npm:whisper-edge@^0.3.0";
 
 const ECHO = "https://rdap.whisper.online/egress-ip";

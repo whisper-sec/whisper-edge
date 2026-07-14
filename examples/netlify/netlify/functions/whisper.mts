@@ -3,7 +3,7 @@
 //   KEYLESS: GET /.netlify/functions/whisper?addr=<agent /128>
 //   EGRESS:  GET /.netlify/functions/whisper?egress   → fetch the source-IP echo THROUGH your agent's /128 (needs a key)
 //   CONTROL: GET /.netlify/functions/whisper?op=list   (set WHISPER_API_KEY in Netlify env)
-// Egress runs on Node's built-in net/tls CONNECT tunnel (bearer encrypted to the proxy) — no CLI, no local proxy.
+// Egress runs on Node's built-in net/tls CONNECT tunnel (bearer encrypted to the proxy): no CLI, no local proxy.
 import { resolve, rdap, control, agentEgress } from "whisper-edge";
 
 const ECHO = "https://rdap.whisper.online/egress-ip";

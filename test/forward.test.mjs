@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { forwardFetch, DEFAULT_FORWARD_URL, WhisperError } from "../dist/index.js";
 
-const AUTH = "Basic dzpldF9TRUNSRVQ="; // Basic base64("w:et_SECRET") — a pre-built header, never a raw bearer
+const AUTH = "Basic dzpldF9TRUNSRVQ="; // Basic base64("w:et_SECRET"): a pre-built header, never a raw bearer
 
 /** A fetch stub that replays a fixed sequence of Responses (one per call), capturing every call. */
 function sequence(responses) {
@@ -75,10 +75,10 @@ test("retries a 407 (token not yet propagated) and succeeds once the gateway cat
  const res = await f("https://v6.ident.me");
  assert.equal(res.status, 200);
  assert.equal(res.headers.get("x-whisper-egress-source"), "2a04:2a01::abcd");
- assert.equal(calls.length, 3); // 2 x 407 then the 200 — every attempt hit the gateway again
+ assert.equal(calls.length, 3); // 2 x 407 then the 200: every attempt hit the gateway again
 });
 
-test("a non-407 failure (e.g. 502) is NOT retried — returned immediately", async () => {
+test("a non-407 failure (e.g. 502) is NOT retried, returned immediately", async () => {
  const { fn, calls } = sequence([() => problemResponse(502)]);
  const f = forwardFetch(AUTH, { fetch: fn, retryDelayMs: 5 });
  const res = await f("https://v6.ident.me");
@@ -103,13 +103,13 @@ test("the retry budget and delay are configurable", async () => {
  assert.equal(calls.length, 5);
 });
 
-// ── real Node transport (no injected `fetch`) — regression coverage for the undici 407 behaviour (nodejs/undici#2896) ────────────────
+// ── real Node transport (no injected `fetch`): regression coverage for the undici 407 behaviour (nodejs/undici#2896) ────────────────
 //
 // On Node, `fetch()` (undici) turns a direct, non-proxied HTTP 407 response into an opaque
 // `TypeError: fetch failed` network error instead of a normal Response (nodejs/undici#2896),
 // so forwardFetch bypasses it for its own request via node:http/node:https when the caller
 // hasn't injected a custom `fetch`. These tests run a REAL local http server and deliberately
-// do NOT pass `{ fetch }`, so they exercise that exact Node-native code path — the one the
+// do NOT pass `{ fetch }`, so they exercise that exact Node-native code path, the one the
 // mocked-fetch tests above cannot reach (a mock fetch never runs into the undici behaviour).
 
 /** Start a plain http server whose responder is swapped per-test; returns { url, close, calls }. */
@@ -146,7 +146,7 @@ test("Node path: a real 407 from the gateway is retried (not thrown as an opaque
  if (hits < 3) return res.writeHead(407, { "content-type": "application/problem+json" }).end('{"error":"proxy_authentication_required","status":407}');
  res.writeHead(200, { "x-whisper-egress-source": "2a04:2a01::abcd" }).end("2a04:2a01::abcd");
  });
- const f = forwardFetch(AUTH, { forwardUrl: srv.url, retryDelayMs: 5 }); // no `fetch` override — real Node path
+ const f = forwardFetch(AUTH, { forwardUrl: srv.url, retryDelayMs: 5 }); // no `fetch` override: real Node path
  const res = await f("https://v6.ident.me");
  assert.equal(res.status, 200);
  assert.equal(await res.text(), "2a04:2a01::abcd");
@@ -212,7 +212,7 @@ test("Node path: a genuine connection failure (nothing listening) is a clear Whi
 
 test("Node path: an explicitly injected `fetch` is honoured verbatim, bypassing the native transport", async () => {
  const { fn, calls } = sequence([() => problemResponse(502)]);
- // A real local server would answer 200 here — proving the injected mock (not the server) won.
+ // A real local server would answer 200 here, proving the injected mock (not the server) won.
  const srv = await localServer();
  try {
  srv.setHandler((_req, res) => res.writeHead(200).end("should not be hit"));

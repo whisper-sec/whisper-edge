@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
-// The CONTROL tier: the full agent control plane, unlocked with an API key. One verb —
-// CALL whisper.agents({op, args}) — POSTed to graph.whisper.security/api/query. The key
+// The CONTROL tier: the full agent control plane, unlocked with an API key. One verb -
+// CALL whisper.agents({op, args}) - POSTed to graph.whisper.security/api/query. The key
 // is sent as X-API-Key and is NEVER logged or echoed. Pure fetch, zero dependencies.
 
 import { buildAgentsQuery } from "./cypher.js";
 import { decodeEnvelope } from "./envelope.js";
+import { WhisperGraph } from "./graph.js";
 import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
 import { endpointsFor } from "./keyless.js";
 import type { ControlResult, RequestOptions } from "./types.js";
@@ -56,19 +57,29 @@ export interface LogsArgs {
 /**
  * The Whisper control plane, authenticated with an owner API key. Every method runs one
  * `whisper.agents` op and returns the normalised {@link ControlResult}. Confined to YOUR
- * tenant by the key. Runs in any fetch runtime — no CLI, no Node built-ins.
+ * tenant by the key. Runs in any fetch runtime - no CLI, no Node built-ins.
  */
 export class WhisperControl {
   private readonly key: string;
   private readonly opts: ControlOptions;
+  private graphClient?: WhisperGraph;
 
   constructor(apiKey: string, opts: ControlOptions = {}) {
     const k = (apiKey ?? "").trim();
     if (k === "") {
-      throw new WhisperError("no API key — pass your whisper_live_ key (never hard-code it; read it from the environment)", { status: 401 });
+      throw new WhisperError("no API key - pass your whisper_live_ key (never hard-code it; read it from the environment)", { status: 401 });
     }
     this.key = k;
     this.opts = opts;
+  }
+
+  /**
+   * The KEYED graph namespace, bound to this SAME key + options (control(key).graph.identify(...)).
+   * The security graph is Cypher, so it is keyed, it rides the one control auth path (no second
+   * auth mechanism). Built lazily on first read. See {@link WhisperGraph}.
+   */
+  get graph(): WhisperGraph {
+    return (this.graphClient ??= new WhisperGraph(this.key, this.opts));
   }
 
   private merge(extra?: RequestOptions): RequestOptions {
@@ -111,7 +122,7 @@ export class WhisperControl {
 
   /**
    * Mint a BRAND-NEW agent with its own routable /128 AND its own API key (op:register).
-   * The new key appears in the returned record as `api_key` and is shown ONCE — capture it.
+   * The new key appears in the returned record as `api_key` and is shown ONCE - capture it.
    */
   register(args: RegisterArgs, reqOpts?: RequestOptions): Promise<ControlResult> {
     const name = (args.name ?? "").trim();
@@ -171,7 +182,7 @@ export class WhisperControl {
     return this.agents("connect", a, reqOpts);
   }
 
-  /** FULLY revoke an agent — withdraw its /128, PTR, tokens, and API key (op:revoke). */
+  /** FULLY revoke an agent - withdraw its /128, PTR, tokens, and API key (op:revoke). */
   revoke(agent: string, reqOpts?: RequestOptions): Promise<ControlResult> {
     const s = (agent ?? "").trim();
     if (s === "") throw new WhisperError("revoke needs an <agent>", { status: 400 });

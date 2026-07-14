@@ -31,7 +31,7 @@ function trimBase(u: string): string {
 }
 
 /**
- * The full server-side verdict for an agent `address` (its /128 — identity is IP-anchored),
+ * The full server-side verdict for an agent `address` (its /128 - identity is IP-anchored),
  * or `null` if it is not a Whisper agent. KEYLESS. A 200 → the verdict; a 404 → `null`; a
  * 400 (not a valid address) or any other fault → a WhisperError with the server's clear
  * message. The server never returns a 500. For a forward name, use {@link rdapDomain}.
@@ -56,7 +56,7 @@ export async function verifyDetails(address: string, opts?: RequestOptions): Pro
 /**
  * Is `address` a real Whisper agent? A boolean convenience over {@link verifyDetails}.
  * KEYLESS. Note: `true` means "is an agent"; inspect the verdict for how strongly it
- * verified (DANE is the load-bearing leg — use {@link resolve} or {@link verifyDetails}).
+ * verified (DANE is the load-bearing leg - use {@link resolve} or {@link verifyDetails}).
  */
 export async function verify(address: string, opts?: RequestOptions): Promise<boolean> {
   const v = await verifyDetails(address, opts);

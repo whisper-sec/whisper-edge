@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Whisper on Vercel Functions — agent identity AND real egress.  npm i whisper-edge
+// Whisper on Vercel Functions: agent identity AND real egress.  npm i whisper-edge
 //   KEYLESS: GET /api/whisper?addr=<agent /128>
 //   EGRESS:  GET /api/whisper?egress   → fetch the source-IP echo THROUGH your agent's /128 (needs a key)
 //   CONTROL: GET /api/whisper?op=list  (set WHISPER_API_KEY in Vercel env vars)

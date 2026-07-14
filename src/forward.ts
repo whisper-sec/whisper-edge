@@ -2,29 +2,29 @@
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
 // The FETCH-FORWARD egress transport. For runtimes with no raw-socket API
-// (fetch-only sandboxes — Vercel Edge, Netlify Edge, and anything `detectRuntime()` cannot place
+// (fetch-only sandboxes - Vercel Edge, Netlify Edge, and anything `detectRuntime()` cannot place
 // on Node/Deno/Cloudflare Workers), a raw CONNECT tunnel is impossible: there is no socket to open.
 // Instead we route the WHOLE request through one small, server-side HTTPS hop:
 //
 // <method> https://forward.whisper.online/forward
 // Authorization: Basic base64("w:"+<et_ bearer>) (same credential as the CONNECT proxy)
 // X-Whisper-Target: <the absolute https:// URL being fetched>
-// X-Whisper-Method: <the method — mirrored on the outer request too, belt-and-braces>
+// X-Whisper-Method: <the method - mirrored on the outer request too, belt-and-braces>
 //
 // The gateway egresses server-side sourced from the agent's routable Whisper /128 and streams
 // the target's response straight back, stamped with `X-Whisper-Egress-Source: <the /128>`. One
-// HTTPS hop, no local proxy, no raw socket needed — this is the ONLY egress path that works in
+// HTTPS hop, no local proxy, no raw socket needed - this is the ONLY egress path that works in
 // literally every fetch runtime, including ones that will never grow a raw-socket API.
 //
-// — a freshly-minted egress token can take up to ~45s to propagate to every gateway
-// node, and a 407 in that window means "not recognised HERE yet", not "bad token" —
+// - a freshly-minted egress token can take up to ~45s to propagate to every gateway
+// node, and a 407 in that window means "not recognised HERE yet", not "bad token" -
 // so we retry a short, capped number of times with a small fixed delay. In practice this
 // converges in one or two extra attempts (a different node, or the same node once it catches
 // up); we do not wait out the full 45s on every call, only enough hops to very likely land on
 // a node that already knows the token.
 //
-// Robustness Principle (RFC 761): conservative in what we EMIT — the auth header carries the
-// bearer and nothing else about it is ever logged; liberal in what we ACCEPT — string | URL |
+// Robustness Principle (RFC 761): conservative in what we EMIT - the auth header carries the
+// bearer and nothing else about it is ever logged; liberal in what we ACCEPT - string | URL |
 // Request inputs, any HTTP method, and a persistent 407 surfaces a clear, actionable error
 // instead of an opaque proxy failure.
 
@@ -35,7 +35,7 @@ import type { RequestOptions } from "./types.js";
 /** The canonical fetch-forward gateway. Overridable for pre-prod / self-host. */
 export const DEFAULT_FORWARD_URL = "https://forward.whisper.online/forward";
 
-/** Default retry budget: short and capped — a handful of quick attempts, not a 45s wait. */
+/** Default retry budget: short and capped - a handful of quick attempts, not a 45s wait. */
 const DEFAULT_RETRIES = 4;
 const DEFAULT_RETRY_DELAY_MS = 1500;
 
@@ -45,7 +45,7 @@ export interface ForwardOptions extends RequestOptions {
  forwardUrl?: string;
  /** Max attempts on a 407 "token not yet propagated" response. Default 4. */
  retries?: number;
- /** Delay between retries, ms — kept short and capped (~1-2s apart). Default 1500. */
+ /** Delay between retries, ms - kept short and capped (~1-2s apart). Default 1500. */
  retryDelayMs?: number;
 }
 
@@ -54,18 +54,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Node's built-in `fetch` (undici) turns ANY direct, non-proxied HTTP 407 response into an
-// opaque `TypeError: fetch failed` network error instead of handing back a normal Response —
+// opaque `TypeError: fetch failed` network error instead of handing back a normal Response -
 // an over-strict reading of the Fetch spec's proxy-authentication step that Firefox's fetch and
 // curl do not apply outside an actual CONNECT-proxied request (nodejs/undici#2896, "wontfix": by
 // design). The fetch-forward gateway legitimately answers with a real 407 while an egress token
 // is still propagating (see the retry loop below), so on Node that 407 is unobservable through
-// `fetch()` — the caller here always ends up in the generic-network-error branch and the
+// `fetch()` - the caller here always ends up in the generic-network-error branch and the
 // propagation retry can never run. There is no way to opt undici's `fetch()` out of this per
 // request, so on Node we bypass it for this ONE call and speak `node:http`/`node:https`
 // directly, which is not subject to the Fetch algorithm and returns 407 like any other status.
-// Skipped when the caller injects their own `fetch` (tests, custom transports) — that override
+// Skipped when the caller injects their own `fetch` (tests, custom transports) - that override
 // is honoured verbatim, per Postel: liberal in what we accept.
-// Minimal structural shape of `node:http`/`node:https` — the project ships no @types/node (it is
+// Minimal structural shape of `node:http`/`node:https` - the project ships no @types/node (it is
 // dependency-free, see tunnel.ts's Node adapter for the same pattern), so this is hand-typed to
 // exactly what we use rather than pulling in the real (much larger) node typings.
 interface NodeHttpResponseLike {
@@ -114,7 +114,7 @@ async function nodeForwardFetch(
  for (const [k, v] of Object.entries(res.headers)) {
  if (v === undefined) continue;
  for (const one of Array.isArray(v) ? v : [v]) {
- try { respHeaders.append(k, one); } catch { /* platform-forbidden header — skip */ }
+ try { respHeaders.append(k, one); } catch { /* platform-forbidden header - skip */ }
  }
  }
  const status = res.statusCode ?? 502;
@@ -145,10 +145,10 @@ async function nodeForwardFetch(
 /**
  * Build a `fetch`-compatible function that routes every request through the fetch-forward
  * gateway, authenticated with an already-built `Basic base64("w:"+bearer)` auth header
- * value (e.g. from `parseProxy(http_proxy).auth` — the SAME credential the CONNECT-tunnel
+ * value (e.g. from `parseProxy(http_proxy).auth` - the SAME credential the CONNECT-tunnel
  * transport uses). Retries a 407 with a short capped backoff.
  *
- * This is a low-level building block — most callers get it for free via {@link agentEgress},
+ * This is a low-level building block - most callers get it for free via {@link agentEgress},
  * which auto-selects it on fetch-only runtimes. Use it directly only if you already hold a
  * pre-built `Authorization` header value (e.g. from a custom `op:connect` call).
  */
@@ -167,7 +167,7 @@ export function forwardFetch(authHeader: string, opts: ForwardOptions = {}): typ
  }
  // The gateway's own credential takes this header slot (Proxy-Authorization isn't forwardable
  // through a plain fetch on every runtime); if YOUR target itself needs bearer auth, carry it
- // in a different header or embed it in the target URL — this slot belongs to the gateway.
+ // in a different header or embed it in the target URL - this slot belongs to the gateway.
  headers.set("authorization", authHeader);
  headers.set("x-whisper-target", url.href);
  headers.set("x-whisper-method", method); // belt-and-braces: the gateway mirrors the outer method too
@@ -177,7 +177,7 @@ export function forwardFetch(authHeader: string, opts: ForwardOptions = {}): typ
  // that our shared, runtime-agnostic Uint8Array (from normaliseRequest) doesn't structurally match.
  const outBody = (body ?? undefined) as BodyInit | undefined;
 
- // Node's fetch cannot observe this gateway's 407 (see nodeForwardFetch above) — bypass it
+ // Node's fetch cannot observe this gateway's 407 (see nodeForwardFetch above) - bypass it
  // there, UNLESS the caller injected their own `fetch` (tests, custom transports), which is
  // always honoured verbatim.
  let forwardUrlObj: URL | null = null;
@@ -202,7 +202,7 @@ export function forwardFetch(authHeader: string, opts: ForwardOptions = {}): typ
  // than handing back an opaque proxy-auth failure.
  const waited = ((retries - 1) * retryDelayMs) / 1000;
  throw new WhisperError(
- `fetch-forward: the gateway still rejected the egress token after ${retries} attempts (~${waited}s) — ` +
+ `fetch-forward: the gateway still rejected the egress token after ${retries} attempts (~${waited}s) - ` +
  "a freshly-minted token can take up to ~45s to propagate to every gateway node; wait a moment and " +
  "retry, or mint a fresh token via connect()",
  { status: 407 },

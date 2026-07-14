@@ -2,13 +2,13 @@
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
 // REAL egress execution. `agentEgress(apiKey, selector?)` calls the control plane's `op:connect`,
-// then returns a `fetch` that routes EVERY request out through the agent's routable Whisper /128 —
+// then returns a `fetch` that routes EVERY request out through the agent's routable Whisper /128 -
 // in-process, with NO CLI and NO local proxy. It is runtime-adaptive: on Node it uses an
 // undici ProxyAgent when present (else a built-in `node:net`/`node:tls` CONNECT tunnel); on Deno
 // and Cloudflare Workers it opens the CONNECT tunnel over their raw-socket primitives.
 //
 // The egress bearer returned by `op:connect` is consumed HERE to open the tunnel and is NEVER
-// returned to the caller, logged, or persisted — it lives only inside this module's closures.
+// returned to the caller, logged, or persisted - it lives only inside this module's closures.
 
 import { control } from "./control.js";
 import { WhisperError } from "./http.js";
@@ -33,7 +33,7 @@ export interface EgressOptions extends RequestOptions {
  /**
  * Force the underlying egress transport instead of auto-detecting it from the runtime.
  * `"auto"` (default) opens a raw-socket CONNECT tunnel on Node/Deno/Cloudflare Workers and
- * falls back to the fetch-forward gateway everywhere else — fetch-only sandboxes like
+ * falls back to the fetch-forward gateway everywhere else - fetch-only sandboxes like
  * Vercel Edge and Netlify Edge, which expose no raw-socket API at all.
  */
  transport?: "auto" | "socket" | "forward";
@@ -49,7 +49,7 @@ export interface EgressOptions extends RequestOptions {
 export interface EgressTransport {
  /** The requested egress tier (e.g. `socks5`). */
  tier: string;
- /** The agent's routable Whisper /128 — the source address your traffic will present. */
+ /** The agent's routable Whisper /128 - the source address your traffic will present. */
  address: string;
  /** The agent's fully-qualified name (reverse-DNS confirms the identity). */
  fqdn: string;
@@ -57,7 +57,7 @@ export interface EgressTransport {
  runtime: EgressRuntime;
  /** True when the bearer is sent to the proxy INSIDE TLS end-to-end (Node); false on single-TLS edge runtimes. */
  tokenProtected: boolean;
- /** Human-readable description of the transport mechanism (for logs/debugging — carries no secret). */
+ /** Human-readable description of the transport mechanism (for logs/debugging - carries no secret). */
  mechanism: string;
 }
 
@@ -68,7 +68,7 @@ export interface AgentEgress {
  /** Secret-free description of the transport (never carries the bearer). */
  transport: EgressTransport;
  /**
- * Open a raw, source-bound tunnel socket to `host:port` (TLS by default) for advanced use —
+ * Open a raw, source-bound tunnel socket to `host:port` (TLS by default) for advanced use -
  * a byte stream that egresses from the /128. You own it; call `close()` when done.
  */
  connect(host: string, port: number, tls?: boolean): Promise<TunnelSocket>;
@@ -159,9 +159,9 @@ function tunnelFetch(
  * // who.ip === egress.transport.address → the request left from YOUR agent's /128
  * ```
  *
- * @param apiKey your `whisper_live_`/`whisper-` owner key (read it from a secret — never hard-code).
+ * @param apiKey your `whisper_live_`/`whisper-` owner key (read it from a secret - never hard-code).
  * @param selector an agent id or `/128` to egress as; omit to reuse the most-recent agent.
- * @param opts `{ tier, timeoutMs, endpoints, fetch }` — all optional (zero-config by default).
+ * @param opts `{ tier, timeoutMs, endpoints, fetch }` - all optional (zero-config by default).
  */
 export async function agentEgress(apiKey: string, selector?: string, opts: EgressOptions = {}): Promise<AgentEgress> {
  const c = control(apiKey, opts);
@@ -176,7 +176,7 @@ export async function agentEgress(apiKey: string, selector?: string, opts: Egres
  const tier = typeof rec.tier === "string" ? rec.tier : (opts.tier ?? "socks5");
  if (!httpProxy) {
  throw new WhisperError(
- "egress: this tier did not return an HTTP-CONNECT proxy — request tier 'socks5' (the default) or 'anyip' for in-process fetch egress",
+ "egress: this tier did not return an HTTP-CONNECT proxy - request tier 'socks5' (the default) or 'anyip' for in-process fetch egress",
  { status: 400 },
  );
  }
@@ -187,7 +187,7 @@ export async function agentEgress(apiKey: string, selector?: string, opts: Egres
  const encryptProxyLeg = supportsNestedTls(runtime); // Node nests TLS → bearer encrypted to the proxy
 
  // Auto-select fetch-forward on any runtime with no raw-socket API (detectRuntime()
- // can only place Node/Deno/Cloudflare Workers on a socket transport — everything else,
+ // can only place Node/Deno/Cloudflare Workers on a socket transport - everything else,
  // including fetch-only sandboxes like Vercel Edge and Netlify Edge, has none). `opts.transport`
  // lets a caller force either side explicitly.
  const wantForward = opts.transport === "forward" || (opts.transport !== "socket" && runtime === "unknown");
@@ -205,7 +205,7 @@ export async function agentEgress(apiKey: string, selector?: string, opts: Egres
  retryDelayMs: opts.retryDelayMs,
  timeoutMs,
  });
- mechanism = `fetch-forward gateway (POST ${opts.forwardUrl ?? DEFAULT_FORWARD_URL} — one HTTPS hop)`;
+ mechanism = `fetch-forward gateway (POST ${opts.forwardUrl ?? DEFAULT_FORWARD_URL} - one HTTPS hop)`;
  tokenProtected = true; // the credential rides inside the HTTPS session to the gateway itself
  } else {
  // Node fast-path: a real undici ProxyAgent fetch (full redirect/stream fidelity) when available.
@@ -234,7 +234,7 @@ export async function agentEgress(apiKey: string, selector?: string, opts: Egres
  if (wantForward) {
  return Promise.reject(new WhisperError(
  "egress: this runtime has no raw-socket API and the fetch-forward gateway relays whole HTTP " +
- "requests, not an arbitrary byte stream — use egress.fetch() (already routed through " +
+ "requests, not an arbitrary byte stream - use egress.fetch() (already routed through " +
  "fetch-forward) instead, or run on Node, Deno, or Cloudflare Workers for a raw connect()",
  { status: 501 },
  ));

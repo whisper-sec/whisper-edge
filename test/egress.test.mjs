@@ -146,9 +146,9 @@ test("agentEgress fails clearly when the tier returns no HTTP-CONNECT proxy", as
  );
 });
 
-// ── two-tier gating: egress is a KEYED tier — no key ⇒ a clear, helpful error, never opaque ──
+// ── two-tier gating: egress is a KEYED tier; no key ⇒ a clear, helpful error, never opaque ──
 
-test("agentEgress with no API key fails clearly (401) — egress is the keyed tier", async () => {
+test("agentEgress with no API key fails clearly (401): egress is the keyed tier", async () => {
  await assert.rejects(
  () => agentEgress(""),
  (e) => e instanceof WhisperError && e.status === 401 && /API key/.test(e.message),
@@ -167,7 +167,7 @@ test("agentEgress({transport:'forward'}) routes egress.fetch through the fetch-f
  });
  const forwardCalls = [];
  // One injected fetch serves BOTH the control-plane connect() call and the forward-gateway
- // call — exactly like a real runtime, where both ride the same global fetch.
+ // call, exactly like a real runtime, where both ride the same global fetch.
  const fetchStub = async (url, init) => {
  const u = String(url);
  if (u.includes("forward.whisper.online")) {
@@ -185,13 +185,13 @@ test("agentEgress({transport:'forward'}) routes egress.fetch through the fetch-f
  assert.equal(forwardCalls.length, 1);
  assert.equal(forwardCalls[0].init.headers.get("x-whisper-target"), "https://v6.ident.me/");
  // The bearer only ever appears inside the (opaque, base64) Authorization header sent to the
- // gateway — never in the transport object, never as a bare string anywhere observable.
+ // gateway, never in the transport object, never as a bare string anywhere observable.
  assert.ok(forwardCalls[0].init.headers.get("authorization").startsWith("Basic "));
  assert.ok(!JSON.stringify(egress.transport).includes("et_TOPSECRET"));
  egress.close();
 });
 
-test("agentEgress({transport:'forward'}).connect() has no raw-socket equivalent — fails clearly, not silently", async () => {
+test("agentEgress({transport:'forward'}).connect() has no raw-socket equivalent: fails clearly, not silently", async () => {
  const connectFetch = connectStub({
  tier: "socks5",
  address: "2a04:2a01::abcd",

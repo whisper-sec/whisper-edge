@@ -3,7 +3,7 @@
 //
 // Faithful port of the Whisper CLI envelope decoder. Liberal in what we ACCEPT: the
 // control plane may reply in the documented `{ok,status,result,error}` shape, the live
-// Neo4j `{rows:[{result:{...}}]}` wrapper, or a bare RFC-7807 problem — all decode here.
+// Neo4j `{rows:[{result:{...}}]}` wrapper, or a bare RFC-7807 problem - all decode here.
 
 import type { ControlResult, Problem } from "./types.js";
 

@@ -2,20 +2,20 @@
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
 // The EGRESS transport: a runtime-adaptive HTTP-CONNECT tunnel that routes a request through
-// the agent's routable Whisper /128. It speaks the SAME wire on three socket primitives —
+// the agent's routable Whisper /128. It speaks the SAME wire on three socket primitives -
 // Node's `node:net`/`node:tls`, Deno's `Deno.connect`/`Deno.startTls`, and Cloudflare's
-// `cloudflare:sockets` `connect()`/`startTls()` — so egress works in-process, with NO CLI and
+// `cloudflare:sockets` `connect()`/`startTls()` - so egress works in-process, with NO CLI and
 // NO local proxy process, on every serverless & edge runtime that exposes raw sockets.
 //
-// Robustness Principle (RFC 761): conservative in what we EMIT — the CONNECT preamble and the
+// Robustness Principle (RFC 761): conservative in what we EMIT - the CONNECT preamble and the
 // forwarded request are strict HTTP/1.1; the egress bearer is used to open the tunnel and is
 // NEVER returned, logged, or persisted (it lives only inside this module's closures). Liberal
-// in what we ACCEPT — string | URL | Request inputs, both chunked and Content-Length framing,
+// in what we ACCEPT - string | URL | Request inputs, both chunked and Content-Length framing,
 // and a clear error (never an opaque hang) on any transport fault.
 
 import { WhisperError } from "./http.js";
 
-/** The runtimes we can open a raw socket on (everything else is fetch-only — see {@link detectRuntime}). */
+/** The runtimes we can open a raw socket on (everything else is fetch-only - see {@link detectRuntime}). */
 export type EgressRuntime = "node" | "deno" | "workers" | "unknown";
 
 /**
@@ -34,9 +34,9 @@ export interface TunnelSocket {
 export interface ProxyEndpoint {
  host: string;
  port: number;
- /** The proxy speaks TLS (an `https://` proxy) — its leg can be encrypted where the runtime allows it. */
+ /** The proxy speaks TLS (an `https://` proxy) - its leg can be encrypted where the runtime allows it. */
  tls: boolean;
- /** `Basic base64(user:pass)` — carries the egress bearer; NEVER expose or log this. */
+ /** `Basic base64(user:pass)` - carries the egress bearer; NEVER expose or log this. */
  auth: string;
 }
 
@@ -76,7 +76,7 @@ function base64(s: string): string {
 
 /**
  * Parse the `op:connect` `http_proxy` field (`https://w:<et_bearer>@egress.whisper.online`) into a
- * {@link ProxyEndpoint}. The userinfo becomes `Proxy-Authorization: Basic base64(user:pass)` — the
+ * {@link ProxyEndpoint}. The userinfo becomes `Proxy-Authorization: Basic base64(user:pass)` - the
  * exact form the egress proxy expects. The bearer never leaves this object.
  */
 export function parseProxy(httpProxy: string): ProxyEndpoint {
@@ -115,7 +115,7 @@ export function supportsNestedTls(runtime: EgressRuntime): boolean {
 
 // ── Node adapter (node:net + node:tls) ───────────────────────────────────────────────────────
 // Pull-based reads (attach a one-shot listener, then pause) so no bytes are buffered by us across
-// a startTls() — `tls.connect({socket})` then owns the underlying stream cleanly (nested TLS OK).
+// a startTls() - `tls.connect({socket})` then owns the underlying stream cleanly (nested TLS OK).
 
 function nodeSock(s: NodeSocketLike): TunnelSocket {
  return {
@@ -244,7 +244,7 @@ export async function openSocket(runtime: EgressRuntime, host: string, port: num
  default:
  throw new WhisperError(
  "egress: this runtime has no raw-socket API, so a raw connect() cannot run here. " +
- "egress.fetch() already auto-routes through the fetch-forward gateway on this runtime — " +
+ "egress.fetch() already auto-routes through the fetch-forward gateway on this runtime - " +
  "use that instead, or run on Node, Deno, or Cloudflare Workers for a raw connect().",
  { status: 501 },
  );
@@ -294,9 +294,9 @@ export async function openTunnel(
  if (status < 200 || status >= 300) {
  const line = head.split("\r\n")[0] || `status ${status}`;
  const msg =
- status === 407 ? "egress: the proxy rejected the credential (407) — the egress token is invalid or expired"
- : status === 429 ? "egress: the agent hit its connection cap (429) — retry shortly"
- : `egress: the proxy refused the tunnel — ${line}`;
+ status === 407 ? "egress: the proxy rejected the credential (407) - the egress token is invalid or expired"
+ : status === 429 ? "egress: the agent hit its connection cap (429) - retry shortly"
+ : `egress: the proxy refused the tunnel - ${line}`;
  throw new WhisperError(msg, { status });
  }
  if (target.tls) sock = await sock.startTls(target.host);

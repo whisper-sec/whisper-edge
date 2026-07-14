@@ -5,8 +5,8 @@ import type { Problem, RequestOptions } from "./types.js";
 
 /**
  * The one error type this SDK throws. It carries the RFC-7807 problem fields the control
- * plane returns (status, detail, title, …) so a caller sees the server's exact, helpful,
- * secret-free message — never an opaque failure (Postel: a clear error, never a raw 500).
+ * plane returns (status, detail, title, ...) so a caller sees the server's exact, helpful,
+ * secret-free message - never an opaque failure (Postel: a clear error, never a raw 500).
  */
 export class WhisperError extends Error {
   readonly status: number;
@@ -33,7 +33,7 @@ export function resolveFetch(opts?: RequestOptions): typeof fetch {
   const f = opts?.fetch ?? (typeof fetch !== "undefined" ? fetch : undefined);
   if (!f) {
     throw new WhisperError(
-      "no global fetch in this runtime — pass { fetch } (Node <18: use undici, or upgrade)",
+      "no global fetch in this runtime - pass { fetch } (Node <18: use undici, or upgrade)",
       { status: 0 },
     );
   }
