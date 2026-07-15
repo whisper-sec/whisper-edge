@@ -15,7 +15,7 @@ export const DEFAULT_ENDPOINTS: Endpoints = {
   flowRun: "https://console.whisper.security/api/gallery/run",
 };
 
-const USER_AGENT = "whisper-edge/0.3";
+const USER_AGENT = "whisper-edge/0.6";
 
 export function endpointsFor(opts?: RequestOptions): Endpoints {
   return { ...DEFAULT_ENDPOINTS, ...(opts?.endpoints ?? {}) };

@@ -100,6 +100,27 @@ export interface ControlResult {
 /** Cypher $-parameters, keyed by name, for a graph query (values are bound, never spliced). */
 export type GraphParams = Record<string, unknown>;
 
+/**
+ * One catalog entry as returned by `graph().recipes()`: everything needed to discover and
+ * call a graph verb. `keyless: true` verbs serve with NO API key at all (rate-limited);
+ * keyed ones need a key. `docsUrl` is the verb's canonical reference page. Baked from the
+ * Whisper query catalog at build time: no key, no network.
+ */
+export interface Recipe {
+  /** The method name on WhisperGraph (e.g. "assess", "typosquat"). */
+  method: string;
+  /** True when the verb serves with no API key (a key lifts the rate limit). */
+  keyless: boolean;
+  /** "direct" = one Cypher read; "flow" = a multi-step investigation over SSE. */
+  mode: "direct" | "flow";
+  /** A one-line summary of what the verb answers. */
+  summary: string;
+  /** Positional parameter names, in order. */
+  params: string[];
+  /** The canonical docs page for this verb. */
+  docsUrl: string;
+}
+
 /** Query statistics the graph endpoint returns alongside the rows. */
 export interface GraphStatistics {
   /** Number of rows in the result. */

@@ -5,14 +5,16 @@
 <h1 align="center">whisper-edge</h1>
 
 <p align="center">
- Agent identity <b>and real egress</b> for serverless & edge runtimes: <b>zero dependencies</b>, one <code>fetch</code>.<br>
- Verify who an agent is with <b>no key</b>; run the full control plane and route traffic from an agent's routable /128 <b>with</b> one.
+ Agent identity, the <b>Whisper security graph</b>, <b>and real egress</b> for serverless & edge runtimes: <b>zero dependencies</b>, one <code>fetch</code>.<br>
+ Verify who an agent is and query the security graph with <b>no key</b>; run the full control plane and route traffic from an agent's routable /128 <b>with</b> one.
 </p>
 
 ```ts
-import { verify, agentEgress } from "whisper-edge";
+import { verify, graph, agentEgress } from "whisper-edge";
 
 if (await verify(addr)) { /* keyless: it's a real, cryptographically-verifiable Whisper agent */ }
+
+const posture = await graph().assess("8.8.8.8"); // keyless too: threat posture from the Whisper graph
 
 const egress = await agentEgress(process.env.WHISPER_API_KEY!); // with a key: real egress
 const who = await egress.fetch("https://api.example.com/whoami"); // this request LEAVES from your agent's /128
@@ -31,15 +33,17 @@ npm i whisper-edge # Node / Cloudflare / Vercel / Netlify / Lambda
 ```
 
 ```ts
-import { verify, resolve, control, agentEgress } from "npm:whisper-edge@^0.3.0"; // Deno / Supabase
+import { verify, resolve, graph, control, agentEgress } from "npm:whisper-edge@^0.6.0"; // Deno / Supabase
 ```
 
 ## Two tiers (+ egress)
 
 Whisper is **Postel-shaped**: with **no key** you can already verify and resolve any agent
-identity (the same public facts RDAP exposes); with **your key** the full control plane unlocks:
-mint agents, set policy, read logs, revoke, **and** you can route real traffic out through an
-agent's routable `/128`.
+identity (the same public facts RDAP exposes) **and** ask the security graph its 13 direct
+read verbs (threat posture, operator identity, look-alikes, real origins, history); with
+**your key** the full surface unlocks: mint agents, set policy, read logs, revoke, raw
+Cypher, the multi-step flows, **and** you can route real traffic out through an agent's
+routable `/128`.
 
 ### Keyless: verify / resolve / RDAP
 
@@ -57,6 +61,81 @@ await rdapDomain("scout.agents.whisper.online"); // → the forward-name RDAP ob
 **DANE-EE TLSA pin** (DNSSEC-anchored, the trust anchor for an agent cert, not a public CA), and
 the JWS identity doc, then folds it into one answer. `daneOk` is the load-bearing field.
 
+### Graph: the Whisper security graph (keyless, zero secrets)
+
+The Whisper graph knows who operates a host, its threat posture, its look-alikes, the real
+origins behind a CDN, WHOIS history, and 15 named multi-step investigations. The **13 direct
+read verbs run with no key at all** (rate-limited taste, ~100/window, real answers). On an
+edge runtime that is a superpower: a threat-scoring function with **no secrets to provision,
+rotate, or leak**.
+
+```ts
+import { graph } from "whisper-edge";
+
+const g = graph(); // no key. really.
+
+await g.assess("8.8.8.8"); // → threat posture: label, band, sub_labels, coverage, evidence
+await g.identify("api.openai.com"); // → who operates this host: vendor, canonical name, roles
+await g.origins("cloudflare.com"); // → the real origin IPs behind the CDN
+await g.explain("paypal.com"); // → threat-feed score + why
+await g.history("example.com"); // → passive-DNS history, and 8 more keyless verbs
+```
+
+A complete, deployable, **zero-secret** function; the same code runs on Cloudflare Workers,
+Vercel Edge, Deno Deploy, Netlify, and Lambda:
+
+```ts
+import { graph, verify } from "whisper-edge";
+
+export default {
+ async fetch(req: Request): Promise<Response> {
+  const ip = new URL(req.url).searchParams.get("ip") ?? "8.8.8.8";
+  const g = graph(); // keyless: no env vars, no secrets, nothing to configure
+  const [agent, posture] = await Promise.all([verify(ip), g.assess(ip)]);
+  return Response.json({ ip, isWhisperAgent: agent, posture: posture.rows });
+ },
+};
+```
+
+Add your key to lift the rate limit and unlock **raw Cypher** and the **multi-step flows**:
+
+```ts
+const g = graph(process.env.WHISPER_API_KEY!); // or: control(key).graph (same key, same auth)
+
+// Raw Cypher, your own query, parameters bound as $-parameters (never spliced):
+await g.query(
+ "MATCH (h:HOSTNAME {name:$n})-[:RESOLVES_TO]->(ip) RETURN ip.name AS ip LIMIT 5",
+ { n: "github.com" },
+);
+
+// Multi-step FLOWS run through the gallery runner over SSE, aggregated into a FlowResult:
+const surface = await g.attackSurface("github.com", { level: "quick" });
+surface.steps; // every step in order · surface.rows/columns → the headline table
+surface.graph; // the unioned node/edge picture · surface.present → the runner's summary
+
+// Any flow by its catalog slug, watching it stream:
+await g.runFlow("typosquat", { domain: "paypal.com" }, {}, { onFlowEvent: (ev) => console.log(ev) });
+```
+
+Discover the whole catalog in one call, with no key and no network:
+
+```ts
+for (const r of graph().recipes()) {
+ console.log(r.method, r.keyless ? "keyless" : "keyed", r.mode, r.docsUrl);
+}
+// 29 verbs: 13 keyless direct reads, 15 keyed flows, and the keyed submit channel,
+// each with its params and canonical docs link
+```
+
+Every verb maps to a catalog entry with its own docs page under
+**[whisper.security/docs](https://www.whisper.security/docs)** (e.g.
+[`identify`](https://www.whisper.security/docs/whisper-graph/procedures/identify),
+[`history`](https://www.whisper.security/docs/whisper-graph/procedures/history));
+`recipes()` carries the exact `docsUrl` for each, and every method's JSDoc has an `@see`
+link your editor surfaces on hover. A missing key on a keyed verb throws a clear 401 that
+tells you exactly what to do, never an opaque failure. Full query reference:
+[whisper-catalog](https://github.com/whisper-sec/whisper-catalog).
+
 ### Control: with your API key
 
 ```ts
@@ -72,34 +151,6 @@ await c.policy({ block: ["ads.example"], default: "allow" }); // per-tenant DNS 
 await c.logs({ kind: "dns", from: "-1h", limit: 200 }); // recent activity
 await c.revoke("scout"); // withdraw the /128, PTR, tokens, and key
 ```
-
-### Graph: the Whisper security graph
-
-```ts
-import { graph } from "whisper-edge";
-
-const g = graph(process.env.WHISPER_API_KEY!); // or: control(key).graph (same key, same auth)
-
-// Named recipes from the catalog, one typed method each:
-await g.identify("api.openai.com"); // → { canonical_name: "Cloudflare", category: "cdn", roles, ... }
-await g.assess("8.8.8.8"); // → threat posture: label, band, sub_labels, coverage, evidence
-await g.history("example.com"); // → passive-DNS / WHOIS history, and 12 more direct verbs
-
-// A raw Cypher escape hatch (params bound as $-parameters, never spliced):
-await g.query("RETURN 1 AS n"); // → { columns: ["n"], rows: [{ n: 1 }], statistics }
-
-// Multi-step FLOWS run through the gallery runner over SSE, aggregated into a FlowResult:
-const surface = await g.attackSurface("github.com", { level: "quick" });
-surface.steps; // every step in order · surface.rows/columns → the headline table
-surface.graph; // the unioned node/edge picture · surface.present → the runner's summary
-// Watch it stream: g.attackSurface("github.com", {}, { onFlowEvent: (ev, data) => ... })
-```
-
-The graph is **Cypher, so it is keyed** (it rides the same `X-API-Key` auth path as the control
-plane). Every method's JSDoc links to its reference page under
-**[whisper.security/docs](https://www.whisper.security/docs)**. There are **14 direct verbs**
-(one parameterised Cypher read each, returning a `GraphResult`), **15 flows** (multi-step
-investigations, returning a `FlowResult`), and `query()` for anything the catalog does not name.
 
 ### Egress: route traffic out through an agent's /128
 
@@ -212,9 +263,9 @@ await agentEgress(key, undefined, { tier: "socks5", timeoutMs: 20000 });
 
 ## API
 
-Keyless: `verify` · `verifyDetails` · `resolve` · `rdap` · `rdapDomain`
+Keyless: `verify` · `verifyDetails` · `resolve` · `rdap` · `rdapDomain` · `graph()` → 13 direct reads (`assess` · `identify` · `variants` · `walk` · `explain` · `origins` · `history` · `historyWhois` · `asset` · `lookupTorRelay` · `dbSchema` · ...) · `recipes()` discovery (no network)
 Control: `control(apiKey)` → `register` · `identity` · `list` · `agent` · `policy` · `logs` · `connect` · `revoke` · `agents(op, args)` · `query(cypher)`
-Graph: `graph(apiKey)` (or `control(apiKey).graph`) → 14 direct verbs (`identify` · `assess` · `variants` · `walk` · `explain` · `origins` · `history` · `historyWhois` · `asset` · `submit` · ...) · 15 flows (`attackSurface` · `attackPath` · `typosquat` · `blastRadius` · ...) · `query(cypher)` raw · `runFlow(slug, inputs, params)`
+Graph, keyed: `graph(apiKey)` (or `control(apiKey).graph`) → unlimited reads · `query(cypher)` raw Cypher · 15 flows (`attackSurface` · `attackPath` · `typosquat` · `blastRadius` · ...) · `runFlow(slug, inputs, params)` · `submit`
 Egress: `agentEgress(apiKey, selector?, opts?)` → `{ fetch, transport, connect, close }` · `detectRuntime()`
 Low-level: `buildAgentsQuery` · `escapeCypherString` · `decodeEnvelope` · `WhisperError`
 

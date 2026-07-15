@@ -12,7 +12,7 @@ import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
 import { endpointsFor } from "./keyless.js";
 import type { ControlResult, RequestOptions } from "./types.js";
 
-const USER_AGENT = "whisper-edge/0.3";
+const USER_AGENT = "whisper-edge/0.6";
 
 /** Options for creating a control client. */
 export interface ControlOptions extends RequestOptions {}
@@ -74,9 +74,11 @@ export class WhisperControl {
   }
 
   /**
-   * The KEYED graph namespace, bound to this SAME key + options (control(key).graph.identify(...)).
-   * The security graph is Cypher, so it is keyed, it rides the one control auth path (no second
-   * auth mechanism). Built lazily on first read. See {@link WhisperGraph}.
+   * The graph namespace, bound to this SAME key + options (control(key).graph.identify(...)).
+   * With the key bound every verb runs unlimited: the direct reads, raw query() Cypher, the
+   * multi-step flows, and submit. It rides the one control auth path (no second auth
+   * mechanism); the keyless taste needs no control client at all (just graph()). Built
+   * lazily on first read. See {@link WhisperGraph}.
    */
   get graph(): WhisperGraph {
     return (this.graphClient ??= new WhisperGraph(this.key, this.opts));

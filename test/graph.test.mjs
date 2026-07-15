@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Tests for the KEYED graph namespace. The network is stubbed: no real key, no real call.
+// Tests for the TWO-TIER graph namespace: the direct read verbs serve keyless (no key,
+// no x-api-key header); raw query() Cypher, the flows, and submit are keyed (a missing
+// key is a clear 401 before any network). The network is stubbed: no real key, no real call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { graph, WhisperGraph, control, WhisperError } from "../dist/index.js";
@@ -21,13 +23,108 @@ const IDENTIFY_ENVELOPE = {
   statistics: { rowCount: 1, executionTimeMs: 12 },
 };
 
-test("constructing the graph without a key throws a clear 401", () => {
-  assert.throws(() => graph("  "), (e) => e instanceof WhisperError && e.status === 401);
+test("graph() constructs with NO key at all (the keyless tier is a first-class citizen)", () => {
+  assert.ok(graph() instanceof WhisperGraph);
+  assert.ok(graph("  ") instanceof WhisperGraph); // blank == keyless, never a construction error
+  assert.ok(new WhisperGraph() instanceof WhisperGraph);
+});
+
+test("graph(opts) object-first overload is accepted (liberal in what we accept)", async () => {
+  const calls = [];
+  const g = graph({ fetch: stub(200, IDENTIFY_ENVELOPE, calls) });
+  const res = await g.identify("api.openai.com");
+  assert.equal(res.rows[0].vendor_id, "openai");
+  assert.equal(calls.length, 1);
 });
 
 test("graph() and new WhisperGraph() are equivalent", () => {
   assert.ok(graph("whisper_live_EXAMPLE") instanceof WhisperGraph);
   assert.ok(new WhisperGraph("whisper_live_EXAMPLE") instanceof WhisperGraph);
+});
+
+test("a KEYLESS read verb with no key serves real answers and sends NO x-api-key header", async () => {
+  const calls = [];
+  const g = graph(undefined, { fetch: stub(200, IDENTIFY_ENVELOPE, calls) });
+  const res = await g.assess("8.8.8.8");
+  assert.equal(res.status, 200);
+  assert.equal(res.columns.length > 0, true);
+  const { url, headers, sentBody } = calls[0];
+  assert.equal(url, "https://graph.whisper.security/api/query");
+  assert.ok(!("x-api-key" in headers)); // keyless: the header is OMITTED, not empty
+  const parsed = JSON.parse(sentBody);
+  assert.equal(parsed.query, "CALL whisper.assess([$v]) YIELD host, label, band, sub_labels, coverage, evidence");
+  assert.deepEqual(parsed.parameters, { v: "8.8.8.8" });
+});
+
+test("a KEYLESS read verb WITH a key sends it as x-api-key (lifts the rate limit)", async () => {
+  const calls = [];
+  const g = graph("whisper_live_EXAMPLE", { fetch: stub(200, IDENTIFY_ENVELOPE, calls) });
+  await g.assess("8.8.8.8");
+  assert.equal(calls[0].headers["x-api-key"], "whisper_live_EXAMPLE");
+});
+
+test("KEYED query() with no key rejects with a clear, helpful 401 before any network", async () => {
+  const calls = [];
+  const g = graph(undefined, { fetch: stub(200, {}, calls) });
+  await assert.rejects(
+    () => g.query("RETURN 1 AS n"),
+    (e) => e instanceof WhisperError && e.status === 401 && /keyed/.test(e.message) && /assess/.test(e.message),
+  );
+  assert.equal(calls.length, 0); // it never even touched the network
+});
+
+test("a KEYED flow with no key rejects with a clear 401 before any network", async () => {
+  const calls = [];
+  const g = graph(undefined, { fetch: stub(200, {}, calls) });
+  await assert.rejects(
+    () => g.typosquat("paypal.com"),
+    (e) => e instanceof WhisperError && e.status === 401 && /typosquat/.test(e.message),
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("KEYED submit with no key rejects with a clear 401 before any network", async () => {
+  const calls = [];
+  const g = graph(undefined, { fetch: stub(200, {}, calls) });
+  await assert.rejects(
+    () => g.submit("indicator", "ip", "203.0.113.5"),
+    (e) => e instanceof WhisperError && e.status === 401,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("recipes() lists the whole catalog: 29 verbs, 13 keyless, no key, no network", () => {
+  const g = graph(); // keyless client, and no fetch stub: recipes() must not need one
+  const rs = g.recipes();
+  assert.equal(rs.length, 29);
+  assert.equal(rs.filter((r) => r.keyless).length, 13);
+  const assess = rs.find((r) => r.method === "assess");
+  assert.equal(assess.keyless, true);
+  assert.equal(assess.mode, "direct");
+  assert.ok(assess.docsUrl.startsWith("https://"));
+  assert.ok(assess.summary.length > 0);
+  const typosquat = rs.find((r) => r.method === "typosquat");
+  assert.equal(typosquat.keyless, false);
+  assert.equal(typosquat.mode, "flow");
+  assert.deepEqual(typosquat.params, ["domain"]);
+  // Every entry carries the discovery contract.
+  for (const r of rs) {
+    assert.equal(typeof r.method, "string");
+    assert.equal(typeof r.keyless, "boolean");
+    assert.ok(r.mode === "direct" || r.mode === "flow");
+    assert.ok(Array.isArray(r.params));
+    assert.ok(r.docsUrl.startsWith("https://"));
+  }
+});
+
+test("recipes() returns copies: a caller's mutation cannot poison the catalog", () => {
+  const g = graph();
+  const first = g.recipes();
+  first[0].method = "clobbered";
+  first[0].params.push("junk");
+  const second = g.recipes();
+  assert.notEqual(second[0].method, "clobbered");
+  assert.ok(!second[0].params.includes("junk"));
 });
 
 test("a direct method POSTs {query, parameters} with X-API-Key (key never in the URL)", async () => {

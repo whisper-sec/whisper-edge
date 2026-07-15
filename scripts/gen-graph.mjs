@@ -3,16 +3,21 @@
 //
 // Generate src/graph.ts from the Whisper catalog (the single source of truth). Reads
 // sdk-methods.json (the functional bits: method name, params, cypher/runVia, returns,
-// mode) and catalog.json (the human bits: purpose, why, columns), both index-aligned,
-// and emits one typed method per catalog entry plus a raw graph.query() escape hatch.
+// mode, requiresKey) and catalog.json (the human bits: purpose, why, columns), both
+// index-aligned, and emits one typed method per catalog entry plus a raw graph.query()
+// escape hatch and a keyless, no-network recipes() discovery method.
 //
 // Run:  node scripts/gen-graph.mjs [path-to-whisper-catalog]
 // Default catalog path is ../whisper-catalog relative to this repo.
 //
-// Every direct entry (mode:direct with a real Cypher) POSTs its parameterised Cypher to
-// /api/query and returns a GraphResult; every flow entry (mode:flow) runs through the
-// gallery runner over SSE and returns the aggregated FlowResult. Both are KEYED. Every
-// method's JSDoc carries an @see link to its canonical docs page.
+// TWO TIERS, straight from the catalog's requiresKey flag (Postel-shaped):
+//   - a direct entry with requiresKey:false serves KEYLESS: it POSTs its parameterised
+//     Cypher to /api/query with NO key at all (rate-limited taste, real answers); a key,
+//     when the client has one, rides as X-API-Key and lifts the limit.
+//   - everything else is KEYED: raw query() Cypher, every flow entry (run through the
+//     gallery runner over SSE), and submit. A missing key throws a clear 401 at call
+//     time, never an opaque failure.
+// Every method's JSDoc carries an @see link to its canonical docs page.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -33,10 +38,10 @@ if (sdk.methods.length !== catalog.entries.length) {
 // the sdk-methods copy, then the canonical host, so a link is always emitted.
 const DOCS_BASE = String(catalog.graph?.docsBase || sdk.docsBase || "https://www.whisper.security").replace(/\/$/, "");
 
-// No em-dashes anywhere (Kaveh's rule): normalise any non-ASCII typography that slipped into
-// the catalog prose to a plain-ASCII equivalent (mirrors the Python generator's _sanitize),
-// and never emit a "/* ... */" that could break the JS block comment. Escape sequences only,
-// so this generator source itself stays pure ASCII.
+// No em-dashes anywhere: normalise any non-ASCII typography that slipped into the catalog
+// prose to a plain-ASCII equivalent (mirrors the Python generator's _sanitize), and never
+// emit a "/* ... */" that could break the JS block comment. Escape sequences only, so this
+// generator source itself stays pure ASCII.
 function clean(s) {
   return String(s ?? "")
     .replace(/\u2014/g, ", ")           // em dash -> comma
@@ -56,6 +61,11 @@ function jsString(s) {
 // A JS identifier that is safe as a positional parameter name in a method signature.
 function paramIdent(name) {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : `_${name.replace(/[^A-Za-z0-9_$]/g, "_")}`;
+}
+
+// KEYLESS iff the catalog says so explicitly (requiresKey:false); absent means keyed.
+function isKeyless(m) {
+  return m.requiresKey === false;
 }
 
 // The set of $-parameters a Cypher body actually binds. A direct method only takes (and
@@ -96,7 +106,13 @@ function methodDoc(entry, m) {
   lines.push("");
   const cols = (m.returns || []).join(", ");
   if (m.mode === "direct" && m.cypher && !isIncomplete(m.cypher)) {
-    lines.push(`KEYED. Cypher: ${clean(m.cypher)}`);
+    if (isKeyless(m)) {
+      lines.push("KEYLESS direct read: serves with NO key at all (rate-limited taste,");
+      lines.push("real answers); a key, when present, is sent as X-API-Key and lifts the");
+      lines.push(`limit. Cypher: ${clean(m.cypher)}`);
+    } else {
+      lines.push(`KEYED. Cypher: ${clean(m.cypher)}`);
+    }
     if (cols) lines.push(`Returns columns: ${cols}.`);
   } else if (m.mode === "direct") {
     // Safety net: a direct entry whose Cypher still carries an un-enumerated placeholder
@@ -163,10 +179,13 @@ function directMethod(entry, m) {
       ? "{}"
       : `{ ${params.map((p) => `${p.name}: ${paramIdent(p.name)}`).join(", ")} }`;
   const cypher = jsString(clean(m.cypher));
+  // The catalog's requiresKey flag routes the verb: keyless direct reads never demand a
+  // key (they send one iff present); keyed ones gate with a clear 401.
+  const call = isKeyless(m) ? "this.runDirectKeyless" : "this.runDirect";
   return (
     `${methodDoc(entry, m)}\n` +
     `  ${m.method}(${sigParts.join(", ")}): Promise<GraphResult> {\n` +
-    `    return this.runDirect(${cypher}, ${paramObj}, reqOpts);\n` +
+    `    return ${call}(${cypher}, ${paramObj}, reqOpts);\n` +
     `  }`
   );
 }
@@ -231,17 +250,37 @@ const methods = sdk.methods
   })
   .join("\n\n");
 
+// The baked catalog for keyless, no-network discovery via graph().recipes(): every verb's
+// name, access tier, mode, one-line summary, positional params, and canonical docs link.
+const recipes = sdk.methods.map((m, i) => {
+  const entry = catalog.entries[i];
+  return {
+    method: m.method,
+    keyless: isKeyless(m),
+    mode: m.mode,
+    summary: clean(m.summary || entry.purpose || ""),
+    params: (m.params || []).map((p) => p.name),
+    docsUrl: docsUrlFor(entry, m),
+  };
+});
+
 const header = `// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
 // GENERATED by scripts/gen-graph.mjs from the Whisper catalog. Do not edit by hand: change
 // the catalog (or the generator) and re-run \`node scripts/gen-graph.mjs\`.
 //
-// The KEYED GRAPH namespace: the Whisper security graph, one typed method per catalog verb,
-// POSTed to graph.whisper.security/api/query. It is Cypher, so it is KEYED (Kaveh's rule:
-// if it is Cypher it needs an API key). This is the SAME auth path as the control plane,
-// the key travels only as X-API-Key, never in a URL or a log. The keyless surface
-// (verify / resolve / rdap) stays pure HTTPS and never touches this namespace.
+// The GRAPH namespace: the Whisper security graph, one typed method per catalog verb,
+// POSTed to graph.whisper.security/api/query. TWO TIERS, Postel-shaped (liberal in what
+// we accept):
+//   - the direct READ verbs (identify, assess, variants, walk, explain, origins, history,
+//     ...) serve KEYLESS: no key, rate-limited (~100/window), real answers. A key, when
+//     present, rides as X-API-Key and lifts the limit.
+//   - raw query() Cypher, the multi-step flows (gallery runner over SSE), and submit are
+//     KEYED: a missing key throws a clear 401 at call time, never an opaque failure.
+// Either way the key travels ONLY as the X-API-Key header, never in a URL or a log. The
+// pure-HTTPS keyless surface (verify / resolve / rdap) lives in keyless.ts; this namespace
+// is the graph itself. Discover every verb with recipes() (keyless, no network).
 //
 // Wire shape: the graph endpoint replies { columns, rows, statistics } where each row is an
 // OBJECT keyed by column name, so this namespace parses that object-row shape itself and
@@ -258,10 +297,11 @@ import type {
   GraphParams,
   GraphResult,
   GraphStatistics,
+  Recipe,
   RequestOptions,
 } from "./types.js";
 
-const USER_AGENT = "whisper-edge/0.3";
+const USER_AGENT = "whisper-edge/0.6";
 
 /** Options for creating a graph client (same shape as the rest of the SDK). */
 export interface GraphOptions extends RequestOptions {}
@@ -288,24 +328,44 @@ function decodeGraph(body: unknown, status: number): GraphResult {
 
 const classShell = `
 /**
- * The Whisper security graph, authenticated with an owner API key. Every method runs one
- * catalog verb. Direct verbs POST a parameterised Cypher read to /api/query and return a
- * {@link GraphResult}; flow verbs (multi-step investigations) run through the gallery
- * runner over SSE and return the aggregated {@link FlowResult}. The raw {@link query}
- * escape hatch runs arbitrary Cypher. Reachable both standalone via graph(key) and as
- * control(key).graph, bound to the same key.
+ * The Whisper security graph (Cypher). Two tiers, both honest:
+ *
+ * - the direct READ verbs (assess, identify, explain, variants, walk, origins, history,
+ *   ...) run KEYLESS: construct with no key at all (\`graph()\`) and they still answer,
+ *   rate-limited (~100/window), with real production-shaped data;
+ * - raw {@link query} Cypher, the multi-step flows ({@link runFlow} and the named flow
+ *   methods), and submit are KEYED: pass your key (\`graph("whisper_live_...")\`) or a
+ *   missing key throws a helpful 401 at call time.
+ *
+ * A key is optional on the read verbs (it lifts the rate limit; sent only as X-API-Key)
+ * and required on the keyed ones. Discover the whole catalog with {@link recipes}
+ * (keyless, no network). Reachable standalone via graph(key?) and as control(key).graph,
+ * bound to the same key.
  */
 export class WhisperGraph {
   private readonly key: string;
   private readonly opts: GraphOptions;
 
-  constructor(apiKey: string, opts: GraphOptions = {}) {
-    const k = (apiKey ?? "").trim();
-    if (k === "") {
-      throw new WhisperError("no API key, the graph is keyed, pass your whisper_live_ key (never hard-code it; read it from the environment)", { status: 401 });
-    }
-    this.key = k;
+  /**
+   * \`apiKey\` is OPTIONAL (Postel: liberal in what we accept). Omit it and the direct
+   * read verbs still serve, keyless and rate-limited; pass your key to lift the limit
+   * and unlock raw query(), the flows, and submit. Never hard-code the key; read it
+   * from a secret/environment.
+   */
+  constructor(apiKey?: string, opts: GraphOptions = {}) {
+    this.key = (apiKey ?? "").trim();
     this.opts = opts;
+  }
+
+  /** The gate for the KEYED verbs: a clear, helpful 401 when no key was given. */
+  private requireKey(what: string): string {
+    if (this.key === "") {
+      throw new WhisperError(
+        \`\${what} is keyed: pass your API key (graph(key) or control(key).graph; read it from a secret, never hard-code it). The direct read verbs (assess, identify, variants, ...) and recipes() need no key.\`,
+        { status: 401 },
+      );
+    }
+    return this.key;
   }
 
   private merge(extra?: RequestOptions): RequestOptions {
@@ -315,25 +375,23 @@ export class WhisperGraph {
   /**
    * POST a parameterised Cypher read to the graph endpoint and decode the object-row
    * envelope. \`params\` are bound server-side as $-parameters (never spliced into the query),
-   * so a value can never break out of the Cypher, however hostile. The key rides only as
-   * the X-API-Key header. Any >=400 status surfaces the server's clear detail as a
+   * so a value can never break out of the Cypher, however hostile. \`apiKey\` rides only as
+   * the X-API-Key header; an EMPTY \`apiKey\` sends NO header at all - that is the keyless
+   * taste (rate-limited). Any >=400 status surfaces the server's clear detail as a
    * WhisperError (Postel: a clear error, never an opaque 500).
    */
-  private async runDirect(cypher: string, params: GraphParams, reqOpts?: RequestOptions): Promise<GraphResult> {
+  private async post(cypher: string, params: GraphParams, apiKey: string, reqOpts?: RequestOptions): Promise<GraphResult> {
     const o = this.merge(reqOpts);
     const url = endpointsFor(o).control;
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "application/json",
+      "user-agent": USER_AGENT,
+    };
+    if (apiKey !== "") headers["x-api-key"] = apiKey; // present => keyed (unlimited); absent => keyless taste
     const resp = await doFetch(
       url,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          "user-agent": USER_AGENT,
-          "x-api-key": this.key,
-        },
-        body: JSON.stringify({ query: cypher, parameters: params }),
-      },
+      { method: "POST", headers, body: JSON.stringify({ query: cypher, parameters: params }) },
       o,
       "graph",
     );
@@ -350,6 +408,34 @@ export class WhisperGraph {
       });
     }
     return decodeGraph(body, resp.status);
+  }
+
+  /**
+   * KEYED direct run: requires a key (a clear 401 when absent). \`async\` so the missing-key
+   * gate REJECTS the returned promise rather than throwing synchronously - a
+   * Promise-returning API must fail through the promise, never out of band.
+   */
+  private async runDirect(cypher: string, params: GraphParams, reqOpts?: RequestOptions): Promise<GraphResult> {
+    return this.post(cypher, params, this.requireKey("this graph call"), reqOpts);
+  }
+
+  /**
+   * KEYLESS direct run: sends the key iff there is one (unlimited), else no header at all
+   * (rate-limited ~100/window). Never throws for a missing key. (Postel: liberal in.)
+   */
+  private runDirectKeyless(cypher: string, params: GraphParams, reqOpts?: RequestOptions): Promise<GraphResult> {
+    return this.post(cypher, params, this.key, reqOpts);
+  }
+
+  /**
+   * Discover the whole catalog: every graph method here - its name, whether it is
+   * \`keyless\`, its \`mode\` (direct read / multi-step flow), a one-line \`summary\`, its
+   * positional \`params\`, and its canonical \`docsUrl\`. No key, no network (baked from
+   * the Whisper query catalog at build time). Call any method by name, or a flow by its
+   * slug via {@link runFlow}.
+   */
+  recipes(): Recipe[] {
+    return _RECIPES.map((r) => ({ ...r, params: [...r.params] }));
   }
 
   /**
@@ -379,6 +465,7 @@ export class WhisperGraph {
     params: FlowParams = {},
     reqOpts?: RequestOptions,
   ): Promise<FlowResult> {
+    const key = this.requireKey(\`flow '\${slug}'\`);
     const o = this.merge(reqOpts);
     const url = endpointsFor(o).flowRun;
 
@@ -432,7 +519,7 @@ export class WhisperGraph {
           accept: "text/event-stream",
           "user-agent": USER_AGENT,
           "x-whisper-client": USER_AGENT,
-          "x-api-key": this.key,
+          "x-api-key": key,
         },
         body: JSON.stringify(body),
         signal: ac.signal,
@@ -582,20 +669,41 @@ export class WhisperGraph {
   }
 `;
 
+const recipesBlock = `
+/**
+ * The baked catalog behind {@link WhisperGraph.recipes}: every graph verb with its access
+ * tier, mode, params, and canonical docs link. Generated from the Whisper query catalog.
+ */
+const _RECIPES: readonly Recipe[] = ${JSON.stringify(recipes, null, 2)};
+`;
+
 const factory = `
-/** Create a graph client bound to \`apiKey\`. Sugar for \`new WhisperGraph(apiKey, opts)\`. */
-export function graph(apiKey: string, opts?: GraphOptions): WhisperGraph {
+/**
+ * Create a graph client. The key is OPTIONAL: \`graph()\` serves the direct read verbs
+ * keyless (rate-limited, real answers - perfect for a zero-secret serverless function);
+ * \`graph("whisper_live_...")\` lifts the limit and unlocks raw query(), the flows, and
+ * submit. Liberal in what it accepts: \`graph(opts)\` works too.
+ */
+export function graph(apiKey?: string | GraphOptions, opts?: GraphOptions): WhisperGraph {
+  if (typeof apiKey === "object" && apiKey !== null) return new WhisperGraph(undefined, apiKey);
   return new WhisperGraph(apiKey, opts);
 }
 `;
 
-const out = `${header}${classShell}\n${methods.split("\n").map((l) => (l === "" ? "" : l)).join("\n")}\n}\n${factory}`;
+const out = `${header}${classShell}\n${methods.split("\n").map((l) => (l === "" ? "" : l)).join("\n")}\n}\n${recipesBlock}${factory}`;
+
+// The emitted module must be pure ASCII (no em-dashes or curly typography can slip
+// through from catalog prose). Fail loudly rather than ship one.
+if (/[^\x00-\x7f]/.test(out)) {
+  throw new Error("generated module is not pure ASCII; extend clean()");
+}
 
 writeFileSync(join(repoRoot, "src", "graph.ts"), out);
+const keyless = sdk.methods.filter((m) => m.mode === "direct" && m.cypher && !isIncomplete(m.cypher) && isKeyless(m)).length;
 const direct = sdk.methods.filter((m) => m.mode === "direct" && m.cypher && !isIncomplete(m.cypher)).length;
 const flow = sdk.methods.filter((m) => m.mode === "flow").length;
 const stub = sdk.methods.length - direct - flow;
 console.log(
-  `wrote src/graph.ts: ${sdk.methods.length} methods (${direct} direct via /api/query, ` +
-    `${flow} flow via gallery/run SSE${stub ? `, ${stub} stubbed` : ""}) + query() raw`,
+  `wrote src/graph.ts: ${sdk.methods.length} methods (${direct} direct via /api/query, of which ${keyless} keyless; ` +
+    `${flow} keyed flows via gallery/run SSE${stub ? `; ${stub} stubbed` : ""}) + query() raw + recipes()`,
 );

@@ -24,7 +24,7 @@ import {
 } from "./tunnel.js";
 import type { EgressRuntime, ProxyEndpoint, TunnelSocket } from "./tunnel.js";
 
-const USER_AGENT = "whisper-edge/0.3";
+const USER_AGENT = "whisper-edge/0.6";
 
 /** Options for {@link agentEgress}. Extends the shared request knobs with the egress tier. */
 export interface EgressOptions extends RequestOptions {
