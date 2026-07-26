@@ -1,0 +1,14 @@
+{
+  "name": "@whisper/edge",
+  "version": "0.6.0",
+  "exports": "./src/index.ts",
+  "publish": {
+    "include": [
+      "src/**/*.ts",
+      "README.md",
+      "logo.png",
+      "LICENSE",
+      "jsr.json"
+    ]
+  }
+}
