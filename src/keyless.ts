@@ -9,7 +9,7 @@ import type { Endpoints, RdapObject, RequestOptions, ResolvedIdentity, VerifyVer
 
 /** Canonical public endpoints. Overridable per call via `opts.endpoints`. */
 export const DEFAULT_ENDPOINTS: Endpoints = {
-  control: "https://graph.whisper.security/api/query",
+  control: "https://graph.whisper.online/api/query",
   rdap: "https://rdap.whisper.online",
   verify: "https://rdap.whisper.online",
   flowRun: "https://console.whisper.security/api/gallery/run",

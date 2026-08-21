@@ -49,7 +49,7 @@ test("a KEYLESS read verb with no key serves real answers and sends NO x-api-key
   assert.equal(res.status, 200);
   assert.equal(res.columns.length > 0, true);
   const { url, headers, sentBody } = calls[0];
-  assert.equal(url, "https://graph.whisper.security/api/query");
+  assert.equal(url, "https://graph.whisper.online/api/query");
   assert.ok(!("x-api-key" in headers)); // keyless: the header is OMITTED, not empty
   const parsed = JSON.parse(sentBody);
   assert.equal(parsed.query, "CALL whisper.assess([$v]) YIELD host, label, band, sub_labels, coverage, evidence");
@@ -139,7 +139,7 @@ test("a direct method POSTs {query, parameters} with X-API-Key (key never in the
   assert.equal(res.status, 200);
 
   const { url, init, sentBody, headers } = calls[0];
-  assert.equal(url, "https://graph.whisper.security/api/query");
+  assert.equal(url, "https://graph.whisper.online/api/query");
   assert.equal(init.method, "POST");
   assert.equal(headers["x-api-key"], "whisper_live_EXAMPLE");
   const parsed = JSON.parse(sentBody);

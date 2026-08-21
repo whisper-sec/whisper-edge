@@ -2,7 +2,7 @@
 // Copyright (c) 2026 viaGraph B.V. (Whisper Security)
 //
 // The CONTROL tier: the full agent control plane, unlocked with an API key. One verb -
-// CALL whisper.agents({op, args}) - POSTed to graph.whisper.security/api/query. The key
+// CALL whisper.agents({op, args}) - POSTed to graph.whisper.online/api/query. The key
 // is sent as X-API-Key and is NEVER logged or echoed. Pure fetch, zero dependencies.
 
 import { buildAgentsQuery } from "./cypher.js";

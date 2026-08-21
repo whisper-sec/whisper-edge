@@ -5,7 +5,7 @@
 // the catalog (or the generator) and re-run `node scripts/gen-graph.mjs`.
 //
 // The GRAPH namespace: the Whisper security graph, one typed method per catalog verb,
-// POSTed to graph.whisper.security/api/query. TWO TIERS, Postel-shaped (liberal in what
+// POSTed to graph.whisper.online/api/query. TWO TIERS, Postel-shaped (liberal in what
 // we accept):
 //   - the direct READ verbs (identify, assess, variants, walk, explain, origins, history,
 //     ...) serve KEYLESS: no key, rate-limited (~100/window), real answers. A key, when

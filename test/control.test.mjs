@@ -24,7 +24,7 @@ test("list POSTs the right Cypher with X-API-Key (key never in the URL)", async 
   const res = await c.list();
   assert.deepEqual(res.records, [{ agent: "scout" }]);
   const { url, init, sentBody } = calls[0];
-  assert.equal(url, "https://graph.whisper.security/api/query");
+  assert.equal(url, "https://graph.whisper.online/api/query");
   assert.equal(init.method, "POST");
   assert.equal(init.headers["x-api-key"], "whisper_live_EXAMPLE");
   assert.equal(JSON.parse(sentBody).query, "CALL whisper.agents({op:'list', args:{kind:'agents'}})");
