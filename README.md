@@ -24,6 +24,11 @@ Runs unchanged on **Cloudflare Workers, Vercel, Deno, Netlify, AWS Lambda, and S
 Functions**. No Node built-ins to install, no CLI, no local proxy process. The egress transport
 runs **in-process** on each runtime's own socket primitive.
 
+**On your own nginx, Apache, OpenLiteSpeed or BIND, use the modules instead.**
+[`whisper-edge-reputation`](https://github.com/whisper-sec/whisper-edge-reputation) loads the
+same reputation as a signed snapshot into the server itself, so a verdict costs no network round
+trip and no syscall, and it fails open. Free, keyless, one install command.
+
 ---
 
 ## Install
