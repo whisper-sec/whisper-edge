@@ -23,6 +23,24 @@ test("shape 2: live Neo4j row wrapper decodes as success", () => {
   assert.deepEqual(env.result.records, [{ addr: "2a04:2a01::1" }]);
 });
 
+test("shape 2a: the front door's per-op row decides ok/status/error (a failure is never an empty success)", () => {
+  const cols = ["op", "ok", "status", "result", "error", "retry_after", "elapsed_ms"];
+  const bad = decodeEnvelope({ columns: cols, rows: [{ op: "revoke", ok: false, status: 404, result: null, error: { code: "NOT_FOUND", message: "nothing was revoked", retryable: false } }] }, 200);
+  assert.equal(bad.ok, false);
+  assert.equal(bad.status, 404);
+  assert.equal(bad.problem.code, "NOT_FOUND");
+  assert.equal(bad.problem.detail, "nothing was revoked");
+  assert.equal(bad.problem.retryable, false);
+  const good = decodeEnvelope({ columns: cols, rows: [["list", true, 200, { columns: ["agent"], rows: [["scout"]] }, null, null, 2]] }, 200);
+  assert.equal(good.ok, true);
+  assert.deepEqual(good.result.records, [{ agent: "scout" }]);
+});
+
+test("a plain result row with a column named ok is not mistaken for the envelope row", () => {
+  const env = decodeEnvelope({ columns: ["ok"], rows: [{ ok: false }] }, 200);
+  assert.equal(env.ok, true);
+});
+
 test("shape 3: bare RFC-7807 problem", () => {
   const env = decodeEnvelope({ title: "Unauthorized", detail: "bad key", status: 401 }, 401);
   assert.equal(env.ok, false);

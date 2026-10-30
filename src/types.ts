@@ -83,6 +83,10 @@ export interface Problem {
   status?: number;
   detail?: string;
   suggestions?: string[];
+  /** The control plane's own error code, e.g. "NOT_FOUND" or "FORBIDDEN". */
+  code?: string;
+  /** Whether the server says retrying could succeed. */
+  retryable?: boolean;
 }
 
 /** A normalised control-plane result: column names + rows + the ergonomic record view. */

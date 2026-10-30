@@ -16,7 +16,7 @@
 export { verify, verifyDetails, resolve, rdap, rdapDomain, DEFAULT_ENDPOINTS } from "./keyless.js";
 export { control, WhisperControl } from "./control.js";
 export type { ControlOptions, RegisterArgs, IdentityArgs, PolicyArgs, LogsArgs } from "./control.js";
-export { WhisperError } from "./http.js";
+export { NotFoundError, WhisperError } from "./http.js";
 
 // GRAPH: the Whisper security graph, one typed method per catalog verb (identify, assess,
 // history, origins, ...) POSTed to /api/query. TWO-TIER: the direct read verbs serve

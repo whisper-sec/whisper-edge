@@ -38,15 +38,39 @@ function pickString(o: Record<string, unknown>, k: string): string | undefined {
 }
 
 function asProblem(o: Record<string, unknown>, status: number): Problem {
+  // The plane's own errors are {code, message, retryable}; RFC 7807 ones use detail/title.
   const p: Problem = {
     type: pickString(o, "type"),
     title: pickString(o, "title"),
-    detail: pickString(o, "detail"),
+    detail: pickString(o, "detail") ?? pickString(o, "message"),
     status: typeof o.status === "number" ? o.status : status,
   };
+  const code = pickString(o, "code");
+  if (code) p.code = code;
+  if (typeof o.retryable === "boolean") p.retryable = o.retryable;
   if (Array.isArray(o.suggestions)) p.suggestions = o.suggestions.filter((s) => typeof s === "string") as string[];
   if (!p.detail && !p.title && !p.type) p.detail = "control plane reported failure";
   return p;
+}
+
+/**
+ * The per-op envelope row of the live table, `{op, ok, status, result, error, ...}`, as an
+ * object row or a positional one aligned to the top-level columns; else null. A row only
+ * counts when it has a boolean `ok` and one of op/result/error, so a plain result row with a
+ * column that happens to be called `ok` is not mistaken for it.
+ */
+function envelopeRow(o: Record<string, unknown>): Record<string, unknown> | null {
+  const rows = Array.isArray(o.rows) ? (o.rows as unknown[]) : null;
+  if (!rows || rows.length === 0) return null;
+  let row = rows[0];
+  if (Array.isArray(row) && Array.isArray(o.columns)) {
+    const m: Record<string, unknown> = {};
+    (o.columns as unknown[]).forEach((c, i) => { if (typeof c === "string" && i < (row as unknown[]).length) m[c] = (row as unknown[])[i]; });
+    row = m;
+  }
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const r = row as Record<string, unknown>;
+  return typeof r.ok === "boolean" && ("op" in r || "result" in r || "error" in r) ? r : null;
 }
 
 function makeResult(r: RawResult, status: number, raw: unknown): ControlResult {
@@ -90,6 +114,23 @@ export function decodeEnvelope(body: unknown, httpStatus: number): Envelope {
       env.problem = o.error && typeof o.error === "object"
         ? asProblem(o.error as Record<string, unknown>, env.status)
         : asProblem(o, env.status);
+    }
+    return env;
+  }
+
+  // Shape 2a: the live table whose first row is the per-op envelope. Its ok/status/error
+  // decide, exactly as a flat envelope's would: a failure inside the row (the front door
+  // answers HTTP 200 with the 404 or 403 in the row) is a failure, never an empty success.
+  const er = envelopeRow(o);
+  if (er) {
+    if (typeof er.status === "number") env.status = er.status;
+    env.ok = er.ok as boolean;
+    if (env.ok) {
+      env.result = makeResult((er.result as RawResult) ?? {}, env.status, body);
+    } else {
+      env.problem = er.error && typeof er.error === "object"
+        ? asProblem(er.error as Record<string, unknown>, env.status)
+        : asProblem({}, env.status);
     }
     return env;
   }

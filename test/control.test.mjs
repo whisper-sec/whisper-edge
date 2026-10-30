@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { control, WhisperControl, WhisperError } from "../dist/index.js";
+import { control, WhisperControl, WhisperError, NotFoundError } from "../dist/index.js";
 
 function stub(status, body, capture) {
   return async (url, init) => {
@@ -59,4 +59,56 @@ test("policy with no args reads back (empty args map)", async () => {
   const res = await c.policy();
   assert.deepEqual(res.records, [{ key: "default", value: "allow" }]);
   assert.equal(JSON.parse(calls[0].sentBody).query, "CALL whisper.agents({op:'policy', args:{}})");
+});
+
+// Nothing revoked: the plane says it two ways, and both must reject with NotFoundError
+// carrying the server's own message. Never a bare 404, never a success.
+const notFoundErr = { code: "NOT_FOUND", message: "nothing was revoked: no agent of yours matches 'ag_gone'", retryable: false };
+const rowCols = ["op", "ok", "status", "result", "error", "retry_after", "elapsed_ms"];
+const isNotFoundErr = (e) =>
+  e instanceof NotFoundError && e instanceof WhisperError && e.code === "NOT_FOUND" && e.status === 404 && e.retryable === false;
+
+for (const [name, status, body] of [
+  ["front door, object row", 200, { columns: rowCols, rows: [{ op: "revoke", ok: false, status: 404, result: null, error: notFoundErr, retry_after: null, elapsed_ms: 3 }] }],
+  ["front door, positional row", 200, { columns: rowCols, rows: [["revoke", false, 404, null, notFoundErr, null, 3]] }],
+  ["flat envelope on HTTP 404", 404, { ok: false, status: 404, result: null, error: notFoundErr }],
+]) {
+  test(`revoke: NOT_FOUND (${name}) rejects with NotFoundError and the server's message`, async () => {
+    const c = control("k", { fetch: stub(status, body) });
+    await assert.rejects(() => c.revoke("ag_gone"), (e) => isNotFoundErr(e) && e.message === notFoundErr.message);
+  });
+}
+
+for (const [name, cols, row] of [
+  ["status", ["agent", "status"], ["ag_gone", "not_found"]],
+  ["under item", ["item"], [{ agent: "ag_gone", status: "NOT_FOUND" }]],
+]) {
+  test(`revoke: an older plane's ok row with not_found (${name}) rejects with NotFoundError`, async () => {
+    const c = control("k", { fetch: stub(200, { ok: true, status: 200, result: { columns: cols, rows: [row] } }) });
+    await assert.rejects(() => c.revoke("ag_gone"), (e) => isNotFoundErr(e) && /nothing was revoked.*ag_gone/.test(e.message));
+  });
+}
+
+test("revoke: a bare 404 with no NOT_FOUND code is a plain WhisperError", async () => {
+  const c = control("k", { fetch: stub(404, { title: "Not Found", status: 404, detail: "no such route" }) });
+  await assert.rejects(() => c.revoke("ag_gone"), (e) => e instanceof WhisperError && !(e instanceof NotFoundError) && e.detail === "no such route");
+});
+
+test("revoke: the NOT_FOUND code on a 403 is not NotFoundError", async () => {
+  const c = control("k", { fetch: stub(403, { ok: false, status: 403, error: { code: "NOT_FOUND", message: "odd", retryable: false } }) });
+  await assert.rejects(() => c.revoke("ag_gone"), (e) => e instanceof WhisperError && !(e instanceof NotFoundError) && e.status === 403);
+});
+
+test("a failure inside the front-door row rejects with the server's code and message", async () => {
+  const c = control("k", { fetch: stub(200, { columns: rowCols, rows: [{ op: "policy", ok: false, status: 403, result: null, error: { code: "FORBIDDEN", message: "this key lacks dns:policy:write", retryable: false } }] }) });
+  await assert.rejects(
+    () => c.policy({ default: "deny" }),
+    (e) => e instanceof WhisperError && e.code === "FORBIDDEN" && e.status === 403 && e.retryable === false && e.message === "this key lacks dns:policy:write",
+  );
+});
+
+test("revoke: a real revoke in the front-door row resolves with its record", async () => {
+  const c = control("k", { fetch: stub(200, { columns: rowCols, rows: [{ op: "revoke", ok: true, status: 200, result: { columns: ["agent", "status"], rows: [["ag_1", "revoked"]] }, error: null }] }) });
+  const res = await c.revoke("ag_1");
+  assert.deepEqual(res.records, [{ agent: "ag_1", status: "revoked" }]);
 });

@@ -8,7 +8,7 @@
 import { buildAgentsQuery } from "./cypher.js";
 import { decodeEnvelope } from "./envelope.js";
 import { WhisperGraph } from "./graph.js";
-import { WhisperError, doFetch, parseJson, readCappedText } from "./http.js";
+import { NotFoundError, WhisperError, doFetch, isNotFound, parseJson, readCappedText } from "./http.js";
 import { endpointsFor } from "./keyless.js";
 import type { ControlResult, RequestOptions } from "./types.js";
 
@@ -112,7 +112,9 @@ export class WhisperControl {
     const env = decodeEnvelope(body, resp.status);
     if (!env.ok || env.problem) {
       const p = env.problem ?? { status: env.status };
-      throw new WhisperError(p.detail ?? p.title ?? `control plane returned status ${p.status ?? env.status}`, p);
+      const message = p.detail ?? p.title ?? `control plane returned status ${p.status ?? env.status}`;
+      if (isNotFound(p)) throw new NotFoundError(message, p);
+      throw new WhisperError(message, p);
     }
     return env.result ?? { columns: [], rows: [], records: [], raw: body, status: env.status };
   }
@@ -184,12 +186,39 @@ export class WhisperControl {
     return this.agents("connect", a, reqOpts);
   }
 
-  /** FULLY revoke an agent - withdraw its /128, PTR, tokens, and API key (op:revoke). */
-  revoke(agent: string, reqOpts?: RequestOptions): Promise<ControlResult> {
+  /**
+   * FULLY revoke an agent - withdraw its /128, PTR, tokens, and API key (op:revoke).
+   * `agent` is its id, its /128 address, or its label.
+   *
+   * Rejects with {@link NotFoundError} when nothing was revoked: no agent of yours matches,
+   * because it was revoked already or is not in your account. Do not retry that; `list()`
+   * shows what is left. Both ways the plane says it reject: the NOT_FOUND error of current
+   * servers, and the `status: not_found` row older ones answered with ok:true.
+   */
+  async revoke(agent: string, reqOpts?: RequestOptions): Promise<ControlResult> {
     const s = (agent ?? "").trim();
     if (s === "") throw new WhisperError("revoke needs an <agent>", { status: 400 });
-    return this.agents("revoke", { agent: s }, reqOpts);
+    const res = await this.agents("revoke", { agent: s }, reqOpts);
+    const rec = res.records[0];
+    const row = rec && typeof rec.item === "object" && rec.item !== null ? (rec.item as Record<string, unknown>) : rec;
+    if (row && revokeRowNotFound(row)) {
+      const said = [row.message, row.detail].find((v): v is string => typeof v === "string" && v.trim() !== "");
+      throw new NotFoundError(
+        said ?? `nothing was revoked: no agent of yours matches ${JSON.stringify(s)}. ` +
+          "If you revoked it before, there is nothing left to revoke; list() shows what is left",
+      );
+    }
+    return res;
   }
+}
+
+/** An older plane's revoke row says not_found (only the first of status/state present is read). */
+function revokeRowNotFound(row: Record<string, unknown>): boolean {
+  for (const k of ["status", "state"]) {
+    const v = row[k];
+    if (typeof v === "string") return v.trim().toLowerCase() === "not_found";
+  }
+  return false;
 }
 
 /** Create a control client bound to `apiKey`. Sugar for `new WhisperControl(apiKey, opts)`. */

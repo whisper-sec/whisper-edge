@@ -255,7 +255,9 @@ the same code path each example calls into.
 ## Errors, timeouts, config
 
 - Failures throw a **`WhisperError`** carrying the server's exact, secret-free message
- (`.status`, `.detail`, `.title`). A "not an agent" is **not** an error, `verify` returns
+ (`.status`, `.detail`, `.title`, and the plane's `.code` / `.retryable`). A `revoke` that
+ matches nothing of yours (revoked already, or not in your account) throws **`NotFoundError`**
+ (`.code` `NOT_FOUND`, `.status` 404, not retryable): nothing was revoked, so do not retry it. A "not an agent" is **not** an error, `verify` returns
  `false`, `resolve`/`rdap` return `null`.
 - Every call takes optional `{ timeoutMs, signal, fetch, endpoints }`. The default timeout never
  hangs, even if the runtime's `fetch` ignores `AbortSignal`.
@@ -272,7 +274,7 @@ Keyless: `verify` · `verifyDetails` · `resolve` · `rdap` · `rdapDomain` · `
 Control: `control(apiKey)` → `register` · `identity` · `list` · `agent` · `policy` · `logs` · `connect` · `revoke` · `agents(op, args)` · `query(cypher)`
 Graph, keyed: `graph(apiKey)` (or `control(apiKey).graph`) → unlimited reads · `query(cypher)` raw Cypher · 15 flows (`attackSurface` · `attackPath` · `typosquat` · `blastRadius` · ...) · `runFlow(slug, inputs, params)` · `submit`
 Egress: `agentEgress(apiKey, selector?, opts?)` → `{ fetch, transport, connect, close }` · `detectRuntime()`
-Low-level: `buildAgentsQuery` · `escapeCypherString` · `decodeEnvelope` · `WhisperError`
+Low-level: `buildAgentsQuery` · `escapeCypherString` · `decodeEnvelope` · `WhisperError` · `NotFoundError`
 
 Full types ship with the package (`whisper-edge` is written in TypeScript).
 

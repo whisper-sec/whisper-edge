@@ -14,6 +14,10 @@ export class WhisperError extends Error {
   readonly title?: string;
   readonly type?: string;
   readonly suggestions?: string[];
+  /** The control plane's own error code (e.g. "NOT_FOUND", "FORBIDDEN"), when it gave one. */
+  readonly code?: string;
+  /** Whether the server says retrying could succeed, when it said. */
+  readonly retryable?: boolean;
 
   constructor(message: string, problem: Problem = {}) {
     super(message);
@@ -23,9 +27,36 @@ export class WhisperError extends Error {
     this.title = problem.title;
     this.type = problem.type;
     this.suggestions = problem.suggestions;
+    this.code = problem.code;
+    this.retryable = problem.retryable;
     // Keep a correct prototype chain across the ES5 down-level target.
     Object.setPrototypeOf(this, WhisperError.prototype);
   }
+}
+
+/**
+ * The control plane understood the call and found nothing of yours to act on. From
+ * `revoke` it means nothing was revoked: the agent was revoked already, or it is not in your
+ * account. That is an answer, not a fault, so never retry it. `code` is "NOT_FOUND", `status`
+ * is 404, `retryable` is false, and the message is the server's own.
+ */
+export class NotFoundError extends WhisperError {
+  constructor(message: string, problem: Problem = {}) {
+    super(message, { ...problem, status: 404, code: "NOT_FOUND", retryable: false });
+    this.name = "NotFoundError";
+    Object.setPrototypeOf(this, NotFoundError.prototype);
+  }
+}
+
+/**
+ * True when a problem is the control plane's NOT_FOUND: the code, on a 404 or with no error
+ * status. Read off the code, never off a bare 404, which is a mistyped endpoint or a proxy
+ * in the way rather than a statement about the agent.
+ */
+export function isNotFound(problem: Problem | null | undefined): boolean {
+  if (!problem || (problem.code ?? "").trim().toUpperCase() !== "NOT_FOUND") return false;
+  const s = problem.status ?? 0;
+  return s === 404 || s < 400;
 }
 
 /** Resolve the fetch to use: an injected one, else the runtime global. */
