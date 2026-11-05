@@ -41,32 +41,7 @@ npm i whisper-edge # Node / Cloudflare / Vercel / Netlify / Lambda
 import { verify, resolve, graph, control, agentEgress } from "npm:whisper-edge@^0.6.0"; // Deno / Supabase
 ```
 
-## Two tiers (+ egress)
-
-Whisper is **Postel-shaped**: with **no key** you can already verify and resolve any agent
-identity (the same public facts RDAP exposes) **and** ask the security graph its 13 direct
-read verbs (threat posture, operator identity, look-alikes, real origins, history); with
-**your key** the full surface unlocks: mint agents, set policy, read logs, revoke, raw
-Cypher, the multi-step flows, **and** you can route real traffic out through an agent's
-routable `/128`.
-
-### Keyless: verify / resolve / RDAP
-
-```ts
-import { verify, verifyDetails, resolve, rdap, rdapDomain } from "whisper-edge";
-
-await verify("2a04:2a01::1"); // → boolean: is this a Whisper agent?
-await verifyDetails("2a04:2a01::1"); // → full verdict (dane_ok, jws_ok, ...) or null
-await resolve("2a04:2a01::1"); // → { fqdn, operator, tenant, daneOk, jwsOk, ... } or null
-await rdap("2a04:2a01::1"); // → the public RDAP object (RFC 9083) or null
-await rdapDomain("scout.agents.whisper.online"); // → the forward-name RDAP object or null
-```
-
-`verify` runs the **whole trust chain server-side**: reverse-DNS PTR, forward-confirm AAAA, the
-**DANE-EE TLSA pin** (DNSSEC-anchored, the trust anchor for an agent cert, not a public CA), and
-the JWS identity doc, then folds it into one answer. `daneOk` is the load-bearing field.
-
-### Graph: the Whisper security graph (keyless, zero secrets)
+## The security graph (keyless, zero setup)
 
 The Whisper graph knows who operates a host, its threat posture, its look-alikes, the real
 origins behind a CDN, WHOIS history, and 15 named multi-step investigations. The **13 direct
@@ -79,8 +54,10 @@ import { graph } from "whisper-edge";
 
 const g = graph(); // no key. really.
 
-await g.assess("8.8.8.8"); // → threat posture: label, band, sub_labels, coverage, evidence
-await g.identify("api.openai.com"); // → who operates this host: vendor, canonical name, roles
+await g.assess("8.8.8.8");
+// → { rows: [{ host: "8.8.8.8", label: "benign-allowlisted", band: "INFO", coverage: "known-clean", evidence: [...] }] }
+await g.identify("api.openai.com");
+// → { rows: [{ host: "api.openai.com", vendor_id: "cloudflare", category: "cdn", roles: ["ORIGIN_AS", "CDN"], ... }] }
 await g.origins("cloudflare.com"); // → the real origin IPs behind the CDN
 await g.explain("paypal.com"); // → threat-feed score + why
 await g.history("example.com"); // → passive-DNS history, and 8 more keyless verbs
@@ -111,7 +88,7 @@ const g = graph(process.env.WHISPER_API_KEY!); // or: control(key).graph (same k
 await g.query(
  "MATCH (h:HOSTNAME {name:$n})-[:RESOLVES_TO]->(ip) RETURN ip.name AS ip LIMIT 5",
  { n: "github.com" },
-);
+); // → { rows: [{ ip: "140.82.112.4" }, { ip: "140.82.121.3" }, ...] }
 
 // Multi-step FLOWS run through the gallery runner over SSE, aggregated into a FlowResult:
 const surface = await g.attackSurface("github.com", { level: "quick" });
@@ -140,6 +117,31 @@ Every verb maps to a catalog entry with its own docs page under
 link your editor surfaces on hover. A missing key on a keyed verb throws a clear 401 that
 tells you exactly what to do, never an opaque failure. Full query reference:
 [whisper-catalog](https://github.com/whisper-sec/whisper-catalog).
+
+## Two tiers (+ egress)
+
+Whisper is **Postel-shaped**: with **no key** you can already verify and resolve any agent
+identity (the same public facts RDAP exposes) **and** ask the security graph its 13 direct
+read verbs (threat posture, operator identity, look-alikes, real origins, history); with
+**your key** the full surface unlocks: mint agents, set policy, read logs, revoke, raw
+Cypher, the multi-step flows, **and** you can route real traffic out through an agent's
+routable `/128`.
+
+### Keyless identity: verify / resolve / RDAP
+
+```ts
+import { verify, verifyDetails, resolve, rdap, rdapDomain } from "whisper-edge";
+
+await verify("2a04:2a01::1"); // → boolean: is this a Whisper agent?
+await verifyDetails("2a04:2a01::1"); // → full verdict (dane_ok, jws_ok, ...) or null
+await resolve("2a04:2a01::1"); // → { fqdn, operator, tenant, daneOk, jwsOk, ... } or null
+await rdap("2a04:2a01::1"); // → the public RDAP object (RFC 9083) or null
+await rdapDomain("scout.agents.whisper.online"); // → the forward-name RDAP object or null
+```
+
+`verify` runs the **whole trust chain server-side**: reverse-DNS PTR, forward-confirm AAAA, the
+**DANE-EE TLSA pin** (DNSSEC-anchored, the trust anchor for an agent cert, not a public CA), and
+the JWS identity doc, then folds it into one answer. `daneOk` is the load-bearing field.
 
 ### Control: with your API key
 
